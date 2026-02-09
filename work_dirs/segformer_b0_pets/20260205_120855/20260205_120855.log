@@ -1,0 +1,1388 @@
+2026/02/05 12:08:56 - mmengine - INFO - 
+------------------------------------------------------------
+System environment:
+    sys.platform: linux
+    Python: 3.10.19 (main, Oct 21 2025, 16:43:05) [GCC 11.2.0]
+    CUDA available: True
+    MUSA available: False
+    numpy_random_seed: 0
+    GPU 0: NVIDIA GeForce RTX 3070 Ti Laptop GPU
+    CUDA_HOME: None
+    GCC: gcc (Ubuntu 11.4.0-1ubuntu1~22.04.2) 11.4.0
+    PyTorch: 2.1.2+cu121
+    PyTorch compiling details: PyTorch built with:
+  - GCC 9.3
+  - C++ Version: 201703
+  - Intel(R) oneAPI Math Kernel Library Version 2022.2-Product Build 20220804 for Intel(R) 64 architecture applications
+  - Intel(R) MKL-DNN v3.1.1 (Git Hash 64f6bcbcbab628e96f33a62c3e975f8535a7bde4)
+  - OpenMP 201511 (a.k.a. OpenMP 4.5)
+  - LAPACK is enabled (usually provided by MKL)
+  - NNPACK is enabled
+  - CPU capability usage: AVX2
+  - CUDA Runtime 12.1
+  - NVCC architecture flags: -gencode;arch=compute_50,code=sm_50;-gencode;arch=compute_60,code=sm_60;-gencode;arch=compute_70,code=sm_70;-gencode;arch=compute_75,code=sm_75;-gencode;arch=compute_80,code=sm_80;-gencode;arch=compute_86,code=sm_86;-gencode;arch=compute_90,code=sm_90
+  - CuDNN 8.9.2
+  - Magma 2.6.1
+  - Build settings: BLAS_INFO=mkl, BUILD_TYPE=Release, CUDA_VERSION=12.1, CUDNN_VERSION=8.9.2, CXX_COMPILER=/opt/rh/devtoolset-9/root/usr/bin/c++, CXX_FLAGS= -D_GLIBCXX_USE_CXX11_ABI=0 -fabi-version=11 -fvisibility-inlines-hidden -DUSE_PTHREADPOOL -DNDEBUG -DUSE_KINETO -DLIBKINETO_NOROCTRACER -DUSE_FBGEMM -DUSE_QNNPACK -DUSE_PYTORCH_QNNPACK -DUSE_XNNPACK -DSYMBOLICATE_MOBILE_DEBUG_HANDLE -O2 -fPIC -Wall -Wextra -Werror=return-type -Werror=non-virtual-dtor -Werror=bool-operation -Wnarrowing -Wno-missing-field-initializers -Wno-type-limits -Wno-array-bounds -Wno-unknown-pragmas -Wno-unused-parameter -Wno-unused-function -Wno-unused-result -Wno-strict-overflow -Wno-strict-aliasing -Wno-stringop-overflow -Wno-psabi -Wno-error=pedantic -Wno-error=old-style-cast -Wno-invalid-partial-specialization -Wno-unused-private-field -Wno-aligned-allocation-unavailable -Wno-missing-braces -fdiagnostics-color=always -faligned-new -Wno-unused-but-set-variable -Wno-maybe-uninitialized -fno-math-errno -fno-trapping-math -Werror=format -Werror=cast-function-type -Wno-stringop-overflow, LAPACK_INFO=mkl, PERF_WITH_AVX=1, PERF_WITH_AVX2=1, PERF_WITH_AVX512=1, TORCH_DISABLE_GPU_ASSERTS=ON, TORCH_VERSION=2.1.2, USE_CUDA=ON, USE_CUDNN=ON, USE_EXCEPTION_PTR=1, USE_GFLAGS=OFF, USE_GLOG=OFF, USE_MKL=ON, USE_MKLDNN=ON, USE_MPI=OFF, USE_NCCL=1, USE_NNPACK=ON, USE_OPENMP=ON, USE_ROCM=OFF, 
+
+    TorchVision: 0.16.2+cu121
+    OpenCV: 4.13.0
+    MMEngine: 0.10.7
+
+Runtime environment:
+    dist_cfg: {'backend': 'nccl'}
+    seed: 0
+    Distributed launcher: none
+    Distributed training: False
+    GPU number: 1
+------------------------------------------------------------
+
+2026/02/05 12:08:56 - mmengine - INFO - Config:
+crop_size = (
+    512,
+    512,
+)
+data_root = 'datasets/oxford-iiit-pet-mmseg'
+dataset_type = 'BaseSegDataset'
+default_hooks = dict(
+    checkpoint=dict(
+        by_epoch=False, interval=200, max_keep_ckpts=3, type='CheckpointHook'),
+    logger=dict(interval=50, type='LoggerHook'),
+    param_scheduler=dict(type='ParamSchedulerHook'),
+    sampler_seed=dict(type='DistSamplerSeedHook'),
+    timer=dict(type='IterTimerHook'))
+default_scope = 'mmseg'
+metainfo = dict(
+    classes=(
+        'background',
+        'pet',
+    ), palette=[
+        [
+            0,
+            0,
+            0,
+        ],
+        [
+            255,
+            0,
+            0,
+        ],
+    ])
+model = dict(
+    backbone=dict(
+        attn_drop_rate=0.0,
+        drop_path_rate=0.1,
+        drop_rate=0.0,
+        embed_dims=32,
+        in_channels=3,
+        mlp_ratio=4,
+        num_heads=[
+            1,
+            2,
+            5,
+            8,
+        ],
+        num_layers=[
+            2,
+            2,
+            2,
+            2,
+        ],
+        num_stages=4,
+        out_indices=(
+            0,
+            1,
+            2,
+            3,
+        ),
+        patch_sizes=[
+            7,
+            3,
+            3,
+            3,
+        ],
+        qkv_bias=True,
+        sr_ratios=[
+            8,
+            4,
+            2,
+            1,
+        ],
+        type='MixVisionTransformer'),
+    data_preprocessor=dict(
+        bgr_to_rgb=True,
+        mean=[
+            123.675,
+            116.28,
+            103.53,
+        ],
+        pad_val=0,
+        seg_pad_val=255,
+        size=(
+            512,
+            512,
+        ),
+        size_divisor=None,
+        std=[
+            58.395,
+            57.12,
+            57.375,
+        ],
+        type='SegDataPreProcessor'),
+    decode_head=dict(
+        align_corners=False,
+        channels=256,
+        dropout_ratio=0.1,
+        in_channels=[
+            32,
+            64,
+            160,
+            256,
+        ],
+        in_index=[
+            0,
+            1,
+            2,
+            3,
+        ],
+        loss_decode=dict(
+            loss_weight=1.0, type='CrossEntropyLoss', use_sigmoid=False),
+        norm_cfg=dict(requires_grad=True, type='BN'),
+        num_classes=2,
+        type='SegformerHead'),
+    test_cfg=dict(mode='whole'),
+    train_cfg=dict(),
+    type='EncoderDecoder')
+optim_wrapper = dict(
+    optimizer=dict(lr=0.0006, type='AdamW', weight_decay=0.01),
+    type='OptimWrapper')
+param_scheduler = [
+    dict(
+        begin=0,
+        by_epoch=False,
+        end=2000,
+        eta_min=1e-05,
+        power=1.0,
+        type='PolyLR'),
+]
+randomness = dict(seed=0)
+test_cfg = dict(type='TestLoop')
+test_dataloader = dict(
+    batch_size=1,
+    dataset=dict(
+        data_prefix=dict(img_path='img_dir/val', seg_map_path='ann_dir/val'),
+        data_root='datasets/oxford-iiit-pet-mmseg',
+        img_suffix='.jpg',
+        metainfo=dict(
+            classes=(
+                'background',
+                'pet',
+            ),
+            palette=[
+                [
+                    0,
+                    0,
+                    0,
+                ],
+                [
+                    255,
+                    0,
+                    0,
+                ],
+            ]),
+        pipeline=[
+            dict(type='LoadImageFromFile'),
+            dict(keep_ratio=True, scale=(
+                512,
+                512,
+            ), type='Resize'),
+            dict(type='LoadAnnotations'),
+            dict(type='PackSegInputs'),
+        ],
+        seg_map_suffix='.png',
+        type='BaseSegDataset'),
+    num_workers=2,
+    persistent_workers=True,
+    sampler=dict(shuffle=False, type='DefaultSampler'))
+test_evaluator = dict(
+    iou_metrics=[
+        'mIoU',
+    ], type='IoUMetric')
+test_pipeline = [
+    dict(type='LoadImageFromFile'),
+    dict(keep_ratio=True, scale=(
+        512,
+        512,
+    ), type='Resize'),
+    dict(type='LoadAnnotations'),
+    dict(type='PackSegInputs'),
+]
+train_cfg = dict(max_iters=2000, type='IterBasedTrainLoop', val_interval=200)
+train_dataloader = dict(
+    batch_size=8,
+    dataset=dict(
+        data_prefix=dict(
+            img_path='img_dir/train', seg_map_path='ann_dir/train'),
+        data_root='datasets/oxford-iiit-pet-mmseg',
+        img_suffix='.jpg',
+        metainfo=dict(
+            classes=(
+                'background',
+                'pet',
+            ),
+            palette=[
+                [
+                    0,
+                    0,
+                    0,
+                ],
+                [
+                    255,
+                    0,
+                    0,
+                ],
+            ]),
+        pipeline=[
+            dict(type='LoadImageFromFile'),
+            dict(type='LoadAnnotations'),
+            dict(
+                keep_ratio=True,
+                ratio_range=(
+                    0.5,
+                    2.0,
+                ),
+                scale=(
+                    512,
+                    512,
+                ),
+                type='RandomResize'),
+            dict(
+                cat_max_ratio=0.95, crop_size=(
+                    512,
+                    512,
+                ), type='RandomCrop'),
+            dict(prob=0.5, type='RandomFlip'),
+            dict(type='PackSegInputs'),
+        ],
+        seg_map_suffix='.png',
+        type='BaseSegDataset'),
+    num_workers=4,
+    persistent_workers=True,
+    sampler=dict(shuffle=True, type='InfiniteSampler'))
+train_pipeline = [
+    dict(type='LoadImageFromFile'),
+    dict(type='LoadAnnotations'),
+    dict(
+        keep_ratio=True,
+        ratio_range=(
+            0.5,
+            2.0,
+        ),
+        scale=(
+            512,
+            512,
+        ),
+        type='RandomResize'),
+    dict(cat_max_ratio=0.95, crop_size=(
+        512,
+        512,
+    ), type='RandomCrop'),
+    dict(prob=0.5, type='RandomFlip'),
+    dict(type='PackSegInputs'),
+]
+val_cfg = dict(type='ValLoop')
+val_dataloader = dict(
+    batch_size=1,
+    dataset=dict(
+        data_prefix=dict(img_path='img_dir/val', seg_map_path='ann_dir/val'),
+        data_root='datasets/oxford-iiit-pet-mmseg',
+        img_suffix='.jpg',
+        metainfo=dict(
+            classes=(
+                'background',
+                'pet',
+            ),
+            palette=[
+                [
+                    0,
+                    0,
+                    0,
+                ],
+                [
+                    255,
+                    0,
+                    0,
+                ],
+            ]),
+        pipeline=[
+            dict(type='LoadImageFromFile'),
+            dict(keep_ratio=True, scale=(
+                512,
+                512,
+            ), type='Resize'),
+            dict(type='LoadAnnotations'),
+            dict(type='PackSegInputs'),
+        ],
+        seg_map_suffix='.png',
+        type='BaseSegDataset'),
+    num_workers=2,
+    persistent_workers=True,
+    sampler=dict(shuffle=False, type='DefaultSampler'))
+val_evaluator = dict(
+    iou_metrics=[
+        'mIoU',
+    ], type='IoUMetric')
+work_dir = './work_dirs/segformer_b0_pets'
+
+2026/02/05 12:08:57 - mmengine - INFO - Distributed training is not used, all SyncBatchNorm (SyncBN) layers in the model will be automatically reverted to BatchNormXd layers if they are used.
+2026/02/05 12:08:57 - mmengine - INFO - Hooks will be executed in the following order:
+before_run:
+(VERY_HIGH   ) RuntimeInfoHook                    
+(BELOW_NORMAL) LoggerHook                         
+ -------------------- 
+before_train:
+(VERY_HIGH   ) RuntimeInfoHook                    
+(NORMAL      ) IterTimerHook                      
+(VERY_LOW    ) CheckpointHook                     
+ -------------------- 
+before_train_epoch:
+(VERY_HIGH   ) RuntimeInfoHook                    
+(NORMAL      ) IterTimerHook                      
+(NORMAL      ) DistSamplerSeedHook                
+ -------------------- 
+before_train_iter:
+(VERY_HIGH   ) RuntimeInfoHook                    
+(NORMAL      ) IterTimerHook                      
+ -------------------- 
+after_train_iter:
+(VERY_HIGH   ) RuntimeInfoHook                    
+(NORMAL      ) IterTimerHook                      
+(BELOW_NORMAL) LoggerHook                         
+(LOW         ) ParamSchedulerHook                 
+(VERY_LOW    ) CheckpointHook                     
+ -------------------- 
+after_train_epoch:
+(NORMAL      ) IterTimerHook                      
+(LOW         ) ParamSchedulerHook                 
+(VERY_LOW    ) CheckpointHook                     
+ -------------------- 
+before_val:
+(VERY_HIGH   ) RuntimeInfoHook                    
+ -------------------- 
+before_val_epoch:
+(NORMAL      ) IterTimerHook                      
+ -------------------- 
+before_val_iter:
+(NORMAL      ) IterTimerHook                      
+ -------------------- 
+after_val_iter:
+(NORMAL      ) IterTimerHook                      
+(BELOW_NORMAL) LoggerHook                         
+ -------------------- 
+after_val_epoch:
+(VERY_HIGH   ) RuntimeInfoHook                    
+(NORMAL      ) IterTimerHook                      
+(BELOW_NORMAL) LoggerHook                         
+(LOW         ) ParamSchedulerHook                 
+(VERY_LOW    ) CheckpointHook                     
+ -------------------- 
+after_val:
+(VERY_HIGH   ) RuntimeInfoHook                    
+ -------------------- 
+after_train:
+(VERY_HIGH   ) RuntimeInfoHook                    
+(VERY_LOW    ) CheckpointHook                     
+ -------------------- 
+before_test:
+(VERY_HIGH   ) RuntimeInfoHook                    
+ -------------------- 
+before_test_epoch:
+(NORMAL      ) IterTimerHook                      
+ -------------------- 
+before_test_iter:
+(NORMAL      ) IterTimerHook                      
+ -------------------- 
+after_test_iter:
+(NORMAL      ) IterTimerHook                      
+(BELOW_NORMAL) LoggerHook                         
+ -------------------- 
+after_test_epoch:
+(VERY_HIGH   ) RuntimeInfoHook                    
+(NORMAL      ) IterTimerHook                      
+(BELOW_NORMAL) LoggerHook                         
+ -------------------- 
+after_test:
+(VERY_HIGH   ) RuntimeInfoHook                    
+ -------------------- 
+after_run:
+(BELOW_NORMAL) LoggerHook                         
+ -------------------- 
+2026/02/05 12:08:57 - mmengine - WARNING - The prefix is not set in metric class IoUMetric.
+Name of parameter - Initialization information
+
+backbone.layers.0.0.projection.weight - torch.Size([32, 3, 7, 7]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.0.0.projection.bias - torch.Size([32]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.0.0.norm.weight - torch.Size([32]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.0.0.norm.bias - torch.Size([32]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.0.1.0.norm1.weight - torch.Size([32]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.0.1.0.norm1.bias - torch.Size([32]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.0.1.0.attn.attn.in_proj_weight - torch.Size([96, 32]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.0.1.0.attn.attn.in_proj_bias - torch.Size([96]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.0.1.0.attn.attn.out_proj.weight - torch.Size([32, 32]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.0.1.0.attn.attn.out_proj.bias - torch.Size([32]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.0.1.0.attn.sr.weight - torch.Size([32, 32, 8, 8]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.0.1.0.attn.sr.bias - torch.Size([32]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.0.1.0.attn.norm.weight - torch.Size([32]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.0.1.0.attn.norm.bias - torch.Size([32]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.0.1.0.norm2.weight - torch.Size([32]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.0.1.0.norm2.bias - torch.Size([32]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.0.1.0.ffn.layers.0.weight - torch.Size([128, 32, 1, 1]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.0.1.0.ffn.layers.0.bias - torch.Size([128]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.0.1.0.ffn.layers.1.weight - torch.Size([128, 1, 3, 3]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.0.1.0.ffn.layers.1.bias - torch.Size([128]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.0.1.0.ffn.layers.4.weight - torch.Size([32, 128, 1, 1]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.0.1.0.ffn.layers.4.bias - torch.Size([32]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.0.1.1.norm1.weight - torch.Size([32]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.0.1.1.norm1.bias - torch.Size([32]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.0.1.1.attn.attn.in_proj_weight - torch.Size([96, 32]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.0.1.1.attn.attn.in_proj_bias - torch.Size([96]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.0.1.1.attn.attn.out_proj.weight - torch.Size([32, 32]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.0.1.1.attn.attn.out_proj.bias - torch.Size([32]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.0.1.1.attn.sr.weight - torch.Size([32, 32, 8, 8]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.0.1.1.attn.sr.bias - torch.Size([32]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.0.1.1.attn.norm.weight - torch.Size([32]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.0.1.1.attn.norm.bias - torch.Size([32]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.0.1.1.norm2.weight - torch.Size([32]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.0.1.1.norm2.bias - torch.Size([32]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.0.1.1.ffn.layers.0.weight - torch.Size([128, 32, 1, 1]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.0.1.1.ffn.layers.0.bias - torch.Size([128]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.0.1.1.ffn.layers.1.weight - torch.Size([128, 1, 3, 3]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.0.1.1.ffn.layers.1.bias - torch.Size([128]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.0.1.1.ffn.layers.4.weight - torch.Size([32, 128, 1, 1]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.0.1.1.ffn.layers.4.bias - torch.Size([32]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.0.2.weight - torch.Size([32]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.0.2.bias - torch.Size([32]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.1.0.projection.weight - torch.Size([64, 32, 3, 3]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.1.0.projection.bias - torch.Size([64]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.1.0.norm.weight - torch.Size([64]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.1.0.norm.bias - torch.Size([64]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.1.1.0.norm1.weight - torch.Size([64]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.1.1.0.norm1.bias - torch.Size([64]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.1.1.0.attn.attn.in_proj_weight - torch.Size([192, 64]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.1.1.0.attn.attn.in_proj_bias - torch.Size([192]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.1.1.0.attn.attn.out_proj.weight - torch.Size([64, 64]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.1.1.0.attn.attn.out_proj.bias - torch.Size([64]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.1.1.0.attn.sr.weight - torch.Size([64, 64, 4, 4]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.1.1.0.attn.sr.bias - torch.Size([64]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.1.1.0.attn.norm.weight - torch.Size([64]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.1.1.0.attn.norm.bias - torch.Size([64]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.1.1.0.norm2.weight - torch.Size([64]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.1.1.0.norm2.bias - torch.Size([64]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.1.1.0.ffn.layers.0.weight - torch.Size([256, 64, 1, 1]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.1.1.0.ffn.layers.0.bias - torch.Size([256]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.1.1.0.ffn.layers.1.weight - torch.Size([256, 1, 3, 3]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.1.1.0.ffn.layers.1.bias - torch.Size([256]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.1.1.0.ffn.layers.4.weight - torch.Size([64, 256, 1, 1]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.1.1.0.ffn.layers.4.bias - torch.Size([64]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.1.1.1.norm1.weight - torch.Size([64]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.1.1.1.norm1.bias - torch.Size([64]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.1.1.1.attn.attn.in_proj_weight - torch.Size([192, 64]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.1.1.1.attn.attn.in_proj_bias - torch.Size([192]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.1.1.1.attn.attn.out_proj.weight - torch.Size([64, 64]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.1.1.1.attn.attn.out_proj.bias - torch.Size([64]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.1.1.1.attn.sr.weight - torch.Size([64, 64, 4, 4]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.1.1.1.attn.sr.bias - torch.Size([64]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.1.1.1.attn.norm.weight - torch.Size([64]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.1.1.1.attn.norm.bias - torch.Size([64]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.1.1.1.norm2.weight - torch.Size([64]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.1.1.1.norm2.bias - torch.Size([64]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.1.1.1.ffn.layers.0.weight - torch.Size([256, 64, 1, 1]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.1.1.1.ffn.layers.0.bias - torch.Size([256]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.1.1.1.ffn.layers.1.weight - torch.Size([256, 1, 3, 3]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.1.1.1.ffn.layers.1.bias - torch.Size([256]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.1.1.1.ffn.layers.4.weight - torch.Size([64, 256, 1, 1]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.1.1.1.ffn.layers.4.bias - torch.Size([64]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.1.2.weight - torch.Size([64]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.1.2.bias - torch.Size([64]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.2.0.projection.weight - torch.Size([160, 64, 3, 3]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.2.0.projection.bias - torch.Size([160]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.2.0.norm.weight - torch.Size([160]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.2.0.norm.bias - torch.Size([160]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.2.1.0.norm1.weight - torch.Size([160]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.2.1.0.norm1.bias - torch.Size([160]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.2.1.0.attn.attn.in_proj_weight - torch.Size([480, 160]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.2.1.0.attn.attn.in_proj_bias - torch.Size([480]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.2.1.0.attn.attn.out_proj.weight - torch.Size([160, 160]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.2.1.0.attn.attn.out_proj.bias - torch.Size([160]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.2.1.0.attn.sr.weight - torch.Size([160, 160, 2, 2]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.2.1.0.attn.sr.bias - torch.Size([160]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.2.1.0.attn.norm.weight - torch.Size([160]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.2.1.0.attn.norm.bias - torch.Size([160]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.2.1.0.norm2.weight - torch.Size([160]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.2.1.0.norm2.bias - torch.Size([160]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.2.1.0.ffn.layers.0.weight - torch.Size([640, 160, 1, 1]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.2.1.0.ffn.layers.0.bias - torch.Size([640]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.2.1.0.ffn.layers.1.weight - torch.Size([640, 1, 3, 3]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.2.1.0.ffn.layers.1.bias - torch.Size([640]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.2.1.0.ffn.layers.4.weight - torch.Size([160, 640, 1, 1]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.2.1.0.ffn.layers.4.bias - torch.Size([160]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.2.1.1.norm1.weight - torch.Size([160]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.2.1.1.norm1.bias - torch.Size([160]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.2.1.1.attn.attn.in_proj_weight - torch.Size([480, 160]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.2.1.1.attn.attn.in_proj_bias - torch.Size([480]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.2.1.1.attn.attn.out_proj.weight - torch.Size([160, 160]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.2.1.1.attn.attn.out_proj.bias - torch.Size([160]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.2.1.1.attn.sr.weight - torch.Size([160, 160, 2, 2]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.2.1.1.attn.sr.bias - torch.Size([160]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.2.1.1.attn.norm.weight - torch.Size([160]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.2.1.1.attn.norm.bias - torch.Size([160]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.2.1.1.norm2.weight - torch.Size([160]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.2.1.1.norm2.bias - torch.Size([160]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.2.1.1.ffn.layers.0.weight - torch.Size([640, 160, 1, 1]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.2.1.1.ffn.layers.0.bias - torch.Size([640]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.2.1.1.ffn.layers.1.weight - torch.Size([640, 1, 3, 3]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.2.1.1.ffn.layers.1.bias - torch.Size([640]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.2.1.1.ffn.layers.4.weight - torch.Size([160, 640, 1, 1]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.2.1.1.ffn.layers.4.bias - torch.Size([160]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.2.2.weight - torch.Size([160]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.2.2.bias - torch.Size([160]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.3.0.projection.weight - torch.Size([256, 160, 3, 3]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.3.0.projection.bias - torch.Size([256]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.3.0.norm.weight - torch.Size([256]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.3.0.norm.bias - torch.Size([256]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.3.1.0.norm1.weight - torch.Size([256]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.3.1.0.norm1.bias - torch.Size([256]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.3.1.0.attn.attn.in_proj_weight - torch.Size([768, 256]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.3.1.0.attn.attn.in_proj_bias - torch.Size([768]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.3.1.0.attn.attn.out_proj.weight - torch.Size([256, 256]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.3.1.0.attn.attn.out_proj.bias - torch.Size([256]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.3.1.0.norm2.weight - torch.Size([256]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.3.1.0.norm2.bias - torch.Size([256]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.3.1.0.ffn.layers.0.weight - torch.Size([1024, 256, 1, 1]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.3.1.0.ffn.layers.0.bias - torch.Size([1024]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.3.1.0.ffn.layers.1.weight - torch.Size([1024, 1, 3, 3]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.3.1.0.ffn.layers.1.bias - torch.Size([1024]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.3.1.0.ffn.layers.4.weight - torch.Size([256, 1024, 1, 1]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.3.1.0.ffn.layers.4.bias - torch.Size([256]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.3.1.1.norm1.weight - torch.Size([256]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.3.1.1.norm1.bias - torch.Size([256]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.3.1.1.attn.attn.in_proj_weight - torch.Size([768, 256]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.3.1.1.attn.attn.in_proj_bias - torch.Size([768]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.3.1.1.attn.attn.out_proj.weight - torch.Size([256, 256]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.3.1.1.attn.attn.out_proj.bias - torch.Size([256]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.3.1.1.norm2.weight - torch.Size([256]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.3.1.1.norm2.bias - torch.Size([256]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.3.1.1.ffn.layers.0.weight - torch.Size([1024, 256, 1, 1]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.3.1.1.ffn.layers.0.bias - torch.Size([1024]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.3.1.1.ffn.layers.1.weight - torch.Size([1024, 1, 3, 3]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.3.1.1.ffn.layers.1.bias - torch.Size([1024]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.3.1.1.ffn.layers.4.weight - torch.Size([256, 1024, 1, 1]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.3.1.1.ffn.layers.4.bias - torch.Size([256]): 
+Initialized by user-defined `init_weights` in MixVisionTransformer  
+
+backbone.layers.3.2.weight - torch.Size([256]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+backbone.layers.3.2.bias - torch.Size([256]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+decode_head.conv_seg.weight - torch.Size([2, 256, 1, 1]): 
+NormalInit: mean=0, std=0.01, bias=0 
+
+decode_head.conv_seg.bias - torch.Size([2]): 
+NormalInit: mean=0, std=0.01, bias=0 
+
+decode_head.convs.0.conv.weight - torch.Size([256, 32, 1, 1]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+decode_head.convs.0.bn.weight - torch.Size([256]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+decode_head.convs.0.bn.bias - torch.Size([256]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+decode_head.convs.1.conv.weight - torch.Size([256, 64, 1, 1]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+decode_head.convs.1.bn.weight - torch.Size([256]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+decode_head.convs.1.bn.bias - torch.Size([256]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+decode_head.convs.2.conv.weight - torch.Size([256, 160, 1, 1]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+decode_head.convs.2.bn.weight - torch.Size([256]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+decode_head.convs.2.bn.bias - torch.Size([256]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+decode_head.convs.3.conv.weight - torch.Size([256, 256, 1, 1]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+decode_head.convs.3.bn.weight - torch.Size([256]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+decode_head.convs.3.bn.bias - torch.Size([256]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+decode_head.fusion_conv.conv.weight - torch.Size([256, 1024, 1, 1]): 
+Initialized by user-defined `init_weights` in ConvModule  
+
+decode_head.fusion_conv.bn.weight - torch.Size([256]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+
+decode_head.fusion_conv.bn.bias - torch.Size([256]): 
+The value is the same before and after calling `init_weights` of EncoderDecoder  
+2026/02/05 12:08:58 - mmengine - WARNING - "FileClient" will be deprecated in future. Please use io functions in https://mmengine.readthedocs.io/en/latest/api/fileio.html#file-io
+2026/02/05 12:08:58 - mmengine - WARNING - "HardDiskBackend" is the alias of "LocalBackend" and the former will be deprecated in future.
+2026/02/05 12:08:58 - mmengine - INFO - Checkpoints will be saved to /home/donfisto/vision-seg/work_dirs/segformer_b0_pets.
+2026/02/05 12:09:12 - mmengine - INFO - Epoch(train) [1][ 50/740]  lr: 5.8554e-04  eta: 0:09:27  time: 0.2729  data_time: 0.0093  memory: 3659  loss: 0.4253  decode.loss_ce: 0.4253  decode.acc_seg: 69.6519
+2026/02/05 12:09:26 - mmengine - INFO - Epoch(train) [1][100/740]  lr: 5.7078e-04  eta: 0:08:57  time: 0.2758  data_time: 0.0090  memory: 3660  loss: 0.4541  decode.loss_ce: 0.4541  decode.acc_seg: 62.4142
+2026/02/05 12:09:40 - mmengine - INFO - Epoch(train) [1][150/740]  lr: 5.5602e-04  eta: 0:08:39  time: 0.2774  data_time: 0.0104  memory: 3659  loss: 0.4666  decode.loss_ce: 0.4666  decode.acc_seg: 69.5709
+2026/02/05 12:09:54 - mmengine - INFO - Epoch(train) [1][200/740]  lr: 5.4127e-04  eta: 0:08:24  time: 0.2799  data_time: 0.0092  memory: 3659  loss: 0.4485  decode.loss_ce: 0.4485  decode.acc_seg: 76.4969
+2026/02/05 12:09:54 - mmengine - INFO - Saving checkpoint at 200 iterations
+2026/02/05 12:09:56 - mmengine - INFO - Epoch(val) [0][  50/1478]    eta: 0:01:02  time: 0.0339  data_time: 0.0017  memory: 339  
+2026/02/05 12:09:57 - mmengine - INFO - Epoch(val) [0][ 100/1478]    eta: 0:00:50  time: 0.0263  data_time: 0.0017  memory: 341  
+2026/02/05 12:09:59 - mmengine - INFO - Epoch(val) [0][ 150/1478]    eta: 0:00:43  time: 0.0308  data_time: 0.0026  memory: 340  
+2026/02/05 12:10:00 - mmengine - INFO - Epoch(val) [0][ 200/1478]    eta: 0:00:38  time: 0.0204  data_time: 0.0018  memory: 338  
+2026/02/05 12:10:01 - mmengine - INFO - Epoch(val) [0][ 250/1478]    eta: 0:00:36  time: 0.0188  data_time: 0.0017  memory: 494  
+2026/02/05 12:10:02 - mmengine - INFO - Epoch(val) [0][ 300/1478]    eta: 0:00:33  time: 0.0206  data_time: 0.0016  memory: 325  
+2026/02/05 12:10:03 - mmengine - INFO - Epoch(val) [0][ 350/1478]    eta: 0:00:30  time: 0.0170  data_time: 0.0018  memory: 341  
+2026/02/05 12:10:04 - mmengine - INFO - Epoch(val) [0][ 400/1478]    eta: 0:00:28  time: 0.0164  data_time: 0.0016  memory: 337  
+2026/02/05 12:10:05 - mmengine - INFO - Epoch(val) [0][ 450/1478]    eta: 0:00:26  time: 0.0166  data_time: 0.0016  memory: 341  
+2026/02/05 12:10:06 - mmengine - INFO - Epoch(val) [0][ 500/1478]    eta: 0:00:24  time: 0.0164  data_time: 0.0016  memory: 341  
+2026/02/05 12:10:07 - mmengine - INFO - Epoch(val) [0][ 550/1478]    eta: 0:00:22  time: 0.0201  data_time: 0.0015  memory: 340  
+2026/02/05 12:10:08 - mmengine - INFO - Epoch(val) [0][ 600/1478]    eta: 0:00:20  time: 0.0171  data_time: 0.0017  memory: 341  
+2026/02/05 12:10:09 - mmengine - INFO - Epoch(val) [0][ 650/1478]    eta: 0:00:19  time: 0.0168  data_time: 0.0016  memory: 341  
+2026/02/05 12:10:10 - mmengine - INFO - Epoch(val) [0][ 700/1478]    eta: 0:00:17  time: 0.0170  data_time: 0.0016  memory: 340  
+2026/02/05 12:10:11 - mmengine - INFO - Epoch(val) [0][ 750/1478]    eta: 0:00:16  time: 0.0175  data_time: 0.0016  memory: 341  
+2026/02/05 12:10:12 - mmengine - INFO - Epoch(val) [0][ 800/1478]    eta: 0:00:14  time: 0.0171  data_time: 0.0018  memory: 335  
+2026/02/05 12:10:13 - mmengine - INFO - Epoch(val) [0][ 850/1478]    eta: 0:00:13  time: 0.0179  data_time: 0.0018  memory: 341  
+2026/02/05 12:10:14 - mmengine - INFO - Epoch(val) [0][ 900/1478]    eta: 0:00:12  time: 0.0235  data_time: 0.0017  memory: 341  
+2026/02/05 12:10:15 - mmengine - INFO - Epoch(val) [0][ 950/1478]    eta: 0:00:11  time: 0.0202  data_time: 0.0021  memory: 341  
+2026/02/05 12:10:16 - mmengine - INFO - Epoch(val) [0][1000/1478]    eta: 0:00:10  time: 0.0180  data_time: 0.0018  memory: 341  
+2026/02/05 12:10:17 - mmengine - INFO - Epoch(val) [0][1050/1478]    eta: 0:00:09  time: 0.0164  data_time: 0.0015  memory: 340  
+2026/02/05 12:10:18 - mmengine - INFO - Epoch(val) [0][1100/1478]    eta: 0:00:08  time: 0.0192  data_time: 0.0017  memory: 341  
+2026/02/05 12:10:19 - mmengine - INFO - Epoch(val) [0][1150/1478]    eta: 0:00:07  time: 0.0166  data_time: 0.0015  memory: 339  
+2026/02/05 12:10:19 - mmengine - INFO - Epoch(val) [0][1200/1478]    eta: 0:00:05  time: 0.0178  data_time: 0.0016  memory: 341  
+2026/02/05 12:10:20 - mmengine - INFO - Epoch(val) [0][1250/1478]    eta: 0:00:04  time: 0.0168  data_time: 0.0016  memory: 341  
+2026/02/05 12:10:21 - mmengine - INFO - Epoch(val) [0][1300/1478]    eta: 0:00:03  time: 0.0188  data_time: 0.0018  memory: 341  
+2026/02/05 12:10:22 - mmengine - INFO - Epoch(val) [0][1350/1478]    eta: 0:00:02  time: 0.0180  data_time: 0.0016  memory: 328  
+2026/02/05 12:10:23 - mmengine - INFO - Epoch(val) [0][1400/1478]    eta: 0:00:01  time: 0.0174  data_time: 0.0015  memory: 335  
+2026/02/05 12:10:24 - mmengine - INFO - Epoch(val) [0][1450/1478]    eta: 0:00:00  time: 0.0186  data_time: 0.0016  memory: 338  
+2026/02/05 12:10:25 - mmengine - INFO - per class results:
+2026/02/05 12:10:25 - mmengine - INFO - 
++------------+-------+-------+
+|   Class    |  IoU  |  Acc  |
++------------+-------+-------+
+| background | 53.67 | 57.07 |
+|    pet     | 55.72 | 90.72 |
++------------+-------+-------+
+2026/02/05 12:10:25 - mmengine - INFO - Epoch(val) [0][1478/1478]    aAcc: 70.7300  mIoU: 54.7000  mAcc: 73.9000  data_time: 0.0019  time: 0.0209
+2026/02/05 12:10:39 - mmengine - INFO - Epoch(train) [1][250/740]  lr: 5.2651e-04  eta: 0:08:10  time: 0.2825  data_time: 0.0094  memory: 3659  loss: 0.4417  decode.loss_ce: 0.4417  decode.acc_seg: 76.3407
+2026/02/05 12:10:53 - mmengine - INFO - Epoch(train) [1][300/740]  lr: 5.1175e-04  eta: 0:07:57  time: 0.2838  data_time: 0.0090  memory: 3659  loss: 0.4078  decode.loss_ce: 0.4078  decode.acc_seg: 62.2515
+2026/02/05 12:11:07 - mmengine - INFO - Epoch(train) [1][350/740]  lr: 4.9699e-04  eta: 0:07:45  time: 0.2934  data_time: 0.0136  memory: 3659  loss: 0.3728  decode.loss_ce: 0.3728  decode.acc_seg: 69.6415
+2026/02/05 12:11:22 - mmengine - INFO - Epoch(train) [1][400/740]  lr: 4.8224e-04  eta: 0:07:33  time: 0.3002  data_time: 0.0162  memory: 3659  loss: 0.3832  decode.loss_ce: 0.3832  decode.acc_seg: 73.9727
+2026/02/05 12:11:22 - mmengine - INFO - Saving checkpoint at 400 iterations
+2026/02/05 12:11:23 - mmengine - INFO - Epoch(val) [0][  50/1478]    eta: 0:00:28  time: 0.0220  data_time: 0.0023  memory: 339  
+2026/02/05 12:11:25 - mmengine - INFO - Epoch(val) [0][ 100/1478]    eta: 0:00:28  time: 0.0235  data_time: 0.0023  memory: 341  
+2026/02/05 12:11:26 - mmengine - INFO - Epoch(val) [0][ 150/1478]    eta: 0:00:28  time: 0.0188  data_time: 0.0018  memory: 340  
+2026/02/05 12:11:27 - mmengine - INFO - Epoch(val) [0][ 200/1478]    eta: 0:00:26  time: 0.0179  data_time: 0.0017  memory: 338  
+2026/02/05 12:11:28 - mmengine - INFO - Epoch(val) [0][ 250/1478]    eta: 0:00:25  time: 0.0177  data_time: 0.0017  memory: 494  
+2026/02/05 12:11:29 - mmengine - INFO - Epoch(val) [0][ 300/1478]    eta: 0:00:24  time: 0.0235  data_time: 0.0023  memory: 325  
+2026/02/05 12:11:30 - mmengine - INFO - Epoch(val) [0][ 350/1478]    eta: 0:00:23  time: 0.0259  data_time: 0.0027  memory: 341  
+2026/02/05 12:11:31 - mmengine - INFO - Epoch(val) [0][ 400/1478]    eta: 0:00:23  time: 0.0275  data_time: 0.0028  memory: 337  
+2026/02/05 12:11:32 - mmengine - INFO - Epoch(val) [0][ 450/1478]    eta: 0:00:22  time: 0.0186  data_time: 0.0017  memory: 341  
+2026/02/05 12:11:33 - mmengine - INFO - Epoch(val) [0][ 500/1478]    eta: 0:00:21  time: 0.0176  data_time: 0.0017  memory: 341  
+2026/02/05 12:11:34 - mmengine - INFO - Epoch(val) [0][ 550/1478]    eta: 0:00:19  time: 0.0174  data_time: 0.0016  memory: 340  
+2026/02/05 12:11:35 - mmengine - INFO - Epoch(val) [0][ 600/1478]    eta: 0:00:18  time: 0.0196  data_time: 0.0018  memory: 341  
+2026/02/05 12:11:36 - mmengine - INFO - Epoch(val) [0][ 650/1478]    eta: 0:00:17  time: 0.0182  data_time: 0.0017  memory: 341  
+2026/02/05 12:11:37 - mmengine - INFO - Epoch(val) [0][ 700/1478]    eta: 0:00:15  time: 0.0173  data_time: 0.0017  memory: 340  
+2026/02/05 12:11:38 - mmengine - INFO - Epoch(val) [0][ 750/1478]    eta: 0:00:14  time: 0.0178  data_time: 0.0017  memory: 341  
+2026/02/05 12:11:39 - mmengine - INFO - Epoch(val) [0][ 800/1478]    eta: 0:00:13  time: 0.0181  data_time: 0.0017  memory: 335  
+2026/02/05 12:11:40 - mmengine - INFO - Epoch(val) [0][ 850/1478]    eta: 0:00:12  time: 0.0182  data_time: 0.0016  memory: 341  
+2026/02/05 12:11:41 - mmengine - INFO - Epoch(val) [0][ 900/1478]    eta: 0:00:11  time: 0.0184  data_time: 0.0017  memory: 341  
+2026/02/05 12:11:41 - mmengine - INFO - Epoch(val) [0][ 950/1478]    eta: 0:00:10  time: 0.0181  data_time: 0.0017  memory: 341  
+2026/02/05 12:11:42 - mmengine - INFO - Epoch(val) [0][1000/1478]    eta: 0:00:09  time: 0.0181  data_time: 0.0018  memory: 341  
+2026/02/05 12:11:43 - mmengine - INFO - Epoch(val) [0][1050/1478]    eta: 0:00:08  time: 0.0198  data_time: 0.0019  memory: 340  
+2026/02/05 12:11:44 - mmengine - INFO - Epoch(val) [0][1100/1478]    eta: 0:00:07  time: 0.0178  data_time: 0.0017  memory: 341  
+2026/02/05 12:11:45 - mmengine - INFO - Epoch(val) [0][1150/1478]    eta: 0:00:06  time: 0.0188  data_time: 0.0019  memory: 339  
+2026/02/05 12:11:46 - mmengine - INFO - Epoch(val) [0][1200/1478]    eta: 0:00:05  time: 0.0177  data_time: 0.0017  memory: 341  
+2026/02/05 12:11:47 - mmengine - INFO - Epoch(val) [0][1250/1478]    eta: 0:00:04  time: 0.0180  data_time: 0.0018  memory: 341  
+2026/02/05 12:11:48 - mmengine - INFO - Epoch(val) [0][1300/1478]    eta: 0:00:03  time: 0.0177  data_time: 0.0017  memory: 341  
+2026/02/05 12:11:49 - mmengine - INFO - Epoch(val) [0][1350/1478]    eta: 0:00:02  time: 0.0183  data_time: 0.0016  memory: 328  
+2026/02/05 12:11:50 - mmengine - INFO - Epoch(val) [0][1400/1478]    eta: 0:00:01  time: 0.0178  data_time: 0.0018  memory: 335  
+2026/02/05 12:11:51 - mmengine - INFO - Epoch(val) [0][1450/1478]    eta: 0:00:00  time: 0.0178  data_time: 0.0017  memory: 338  
+2026/02/05 12:11:51 - mmengine - INFO - per class results:
+2026/02/05 12:11:51 - mmengine - INFO - 
++------------+-------+-------+
+|   Class    |  IoU  |  Acc  |
++------------+-------+-------+
+| background | 58.55 | 61.45 |
+|    pet     |  59.3 | 92.75 |
++------------+-------+-------+
+2026/02/05 12:11:51 - mmengine - INFO - Epoch(val) [0][1478/1478]    aAcc: 74.1600  mIoU: 58.9200  mAcc: 77.1000  data_time: 0.0019  time: 0.0192
+2026/02/05 12:12:05 - mmengine - INFO - Epoch(train) [1][450/740]  lr: 4.6748e-04  eta: 0:07:20  time: 0.2892  data_time: 0.0094  memory: 3659  loss: 0.3529  decode.loss_ce: 0.3529  decode.acc_seg: 75.3591
+2026/02/05 12:12:20 - mmengine - INFO - Epoch(train) [1][500/740]  lr: 4.5272e-04  eta: 0:07:07  time: 0.2896  data_time: 0.0089  memory: 3658  loss: 0.3599  decode.loss_ce: 0.3599  decode.acc_seg: 79.7519
+2026/02/05 12:12:35 - mmengine - INFO - Epoch(train) [1][550/740]  lr: 4.3796e-04  eta: 0:06:53  time: 0.2913  data_time: 0.0095  memory: 3658  loss: 0.3454  decode.loss_ce: 0.3454  decode.acc_seg: 83.5373
+2026/02/05 12:12:49 - mmengine - INFO - Epoch(train) [1][600/740]  lr: 4.2321e-04  eta: 0:06:39  time: 0.2881  data_time: 0.0093  memory: 3658  loss: 0.3267  decode.loss_ce: 0.3267  decode.acc_seg: 74.6271
+2026/02/05 12:12:49 - mmengine - INFO - Saving checkpoint at 600 iterations
+2026/02/05 12:12:50 - mmengine - INFO - Epoch(val) [0][  50/1478]    eta: 0:00:26  time: 0.0175  data_time: 0.0017  memory: 339  
+2026/02/05 12:12:51 - mmengine - INFO - Epoch(val) [0][ 100/1478]    eta: 0:00:25  time: 0.0180  data_time: 0.0017  memory: 341  
+2026/02/05 12:12:52 - mmengine - INFO - Epoch(val) [0][ 150/1478]    eta: 0:00:24  time: 0.0175  data_time: 0.0017  memory: 340  
+2026/02/05 12:12:53 - mmengine - INFO - Epoch(val) [0][ 200/1478]    eta: 0:00:23  time: 0.0176  data_time: 0.0017  memory: 338  
+2026/02/05 12:12:54 - mmengine - INFO - Epoch(val) [0][ 250/1478]    eta: 0:00:22  time: 0.0170  data_time: 0.0016  memory: 494  
+2026/02/05 12:12:55 - mmengine - INFO - Epoch(val) [0][ 300/1478]    eta: 0:00:21  time: 0.0181  data_time: 0.0018  memory: 325  
+2026/02/05 12:12:56 - mmengine - INFO - Epoch(val) [0][ 350/1478]    eta: 0:00:20  time: 0.0178  data_time: 0.0016  memory: 341  
+2026/02/05 12:12:57 - mmengine - INFO - Epoch(val) [0][ 400/1478]    eta: 0:00:19  time: 0.0176  data_time: 0.0017  memory: 337  
+2026/02/05 12:12:58 - mmengine - INFO - Epoch(val) [0][ 450/1478]    eta: 0:00:18  time: 0.0173  data_time: 0.0016  memory: 341  
+2026/02/05 12:12:59 - mmengine - INFO - Epoch(val) [0][ 500/1478]    eta: 0:00:17  time: 0.0182  data_time: 0.0016  memory: 341  
+2026/02/05 12:12:59 - mmengine - INFO - Epoch(val) [0][ 550/1478]    eta: 0:00:16  time: 0.0161  data_time: 0.0015  memory: 340  
+2026/02/05 12:13:00 - mmengine - INFO - Epoch(val) [0][ 600/1478]    eta: 0:00:15  time: 0.0178  data_time: 0.0017  memory: 341  
+2026/02/05 12:13:01 - mmengine - INFO - Epoch(val) [0][ 650/1478]    eta: 0:00:14  time: 0.0173  data_time: 0.0016  memory: 341  
+2026/02/05 12:13:02 - mmengine - INFO - Epoch(val) [0][ 700/1478]    eta: 0:00:14  time: 0.0175  data_time: 0.0017  memory: 340  
+2026/02/05 12:13:03 - mmengine - INFO - Epoch(val) [0][ 750/1478]    eta: 0:00:13  time: 0.0173  data_time: 0.0016  memory: 341  
+2026/02/05 12:13:04 - mmengine - INFO - Epoch(val) [0][ 800/1478]    eta: 0:00:12  time: 0.0178  data_time: 0.0017  memory: 335  
+2026/02/05 12:13:05 - mmengine - INFO - Epoch(val) [0][ 850/1478]    eta: 0:00:11  time: 0.0176  data_time: 0.0016  memory: 341  
+2026/02/05 12:13:06 - mmengine - INFO - Epoch(val) [0][ 900/1478]    eta: 0:00:10  time: 0.0180  data_time: 0.0017  memory: 341  
+2026/02/05 12:13:07 - mmengine - INFO - Epoch(val) [0][ 950/1478]    eta: 0:00:09  time: 0.0184  data_time: 0.0017  memory: 341  
+2026/02/05 12:13:08 - mmengine - INFO - Epoch(val) [0][1000/1478]    eta: 0:00:08  time: 0.0177  data_time: 0.0016  memory: 341  
+2026/02/05 12:13:08 - mmengine - INFO - Epoch(val) [0][1050/1478]    eta: 0:00:07  time: 0.0169  data_time: 0.0014  memory: 340  
+2026/02/05 12:13:09 - mmengine - INFO - Epoch(val) [0][1100/1478]    eta: 0:00:06  time: 0.0176  data_time: 0.0017  memory: 341  
+2026/02/05 12:13:10 - mmengine - INFO - Epoch(val) [0][1150/1478]    eta: 0:00:05  time: 0.0178  data_time: 0.0017  memory: 339  
+2026/02/05 12:13:11 - mmengine - INFO - Epoch(val) [0][1200/1478]    eta: 0:00:05  time: 0.0182  data_time: 0.0017  memory: 341  
+2026/02/05 12:13:12 - mmengine - INFO - Epoch(val) [0][1250/1478]    eta: 0:00:04  time: 0.0203  data_time: 0.0019  memory: 341  
+2026/02/05 12:13:13 - mmengine - INFO - Epoch(val) [0][1300/1478]    eta: 0:00:03  time: 0.0173  data_time: 0.0016  memory: 341  
+2026/02/05 12:13:14 - mmengine - INFO - Epoch(val) [0][1350/1478]    eta: 0:00:02  time: 0.0181  data_time: 0.0018  memory: 328  
+2026/02/05 12:13:15 - mmengine - INFO - Epoch(val) [0][1400/1478]    eta: 0:00:01  time: 0.0183  data_time: 0.0017  memory: 335  
+2026/02/05 12:13:16 - mmengine - INFO - Epoch(val) [0][1450/1478]    eta: 0:00:00  time: 0.0182  data_time: 0.0017  memory: 338  
+2026/02/05 12:13:16 - mmengine - INFO - per class results:
+2026/02/05 12:13:16 - mmengine - INFO - 
++------------+-------+-------+
+|   Class    |  IoU  |  Acc  |
++------------+-------+-------+
+| background | 73.82 | 81.25 |
+|    pet     | 66.91 | 85.27 |
++------------+-------+-------+
+2026/02/05 12:13:16 - mmengine - INFO - Epoch(val) [0][1478/1478]    aAcc: 82.8800  mIoU: 70.3700  mAcc: 83.2600  data_time: 0.0018  time: 0.0182
+2026/02/05 12:13:31 - mmengine - INFO - Epoch(train) [1][650/740]  lr: 4.0845e-04  eta: 0:06:25  time: 0.2861  data_time: 0.0091  memory: 3660  loss: 0.3246  decode.loss_ce: 0.3246  decode.acc_seg: 84.6167
+2026/02/05 12:13:45 - mmengine - INFO - Epoch(train) [1][700/740]  lr: 3.9369e-04  eta: 0:06:11  time: 0.2900  data_time: 0.0098  memory: 3658  loss: 0.2867  decode.loss_ce: 0.2867  decode.acc_seg: 85.8688
+2026/02/05 12:13:57 - mmengine - INFO - Exp name: segformer_b0_pets_20260205_120855
+2026/02/05 12:14:00 - mmengine - INFO - Epoch(train) [1][750/740]  lr: 3.7893e-04  eta: 0:05:57  time: 0.2901  data_time: 0.0099  memory: 3659  loss: 0.3453  decode.loss_ce: 0.3453  decode.acc_seg: 87.2222
+2026/02/05 12:14:14 - mmengine - INFO - Epoch(train) [1][800/740]  lr: 3.6418e-04  eta: 0:05:43  time: 0.2882  data_time: 0.0094  memory: 3658  loss: 0.2733  decode.loss_ce: 0.2733  decode.acc_seg: 84.8973
+2026/02/05 12:14:14 - mmengine - INFO - Saving checkpoint at 800 iterations
+2026/02/05 12:14:15 - mmengine - INFO - Epoch(val) [0][  50/1478]    eta: 0:00:29  time: 0.0198  data_time: 0.0018  memory: 339  
+2026/02/05 12:14:16 - mmengine - INFO - Epoch(val) [0][ 100/1478]    eta: 0:00:28  time: 0.0205  data_time: 0.0019  memory: 341  
+2026/02/05 12:14:17 - mmengine - INFO - Epoch(val) [0][ 150/1478]    eta: 0:00:26  time: 0.0179  data_time: 0.0018  memory: 340  
+2026/02/05 12:14:18 - mmengine - INFO - Epoch(val) [0][ 200/1478]    eta: 0:00:25  time: 0.0182  data_time: 0.0017  memory: 338  
+2026/02/05 12:14:19 - mmengine - INFO - Epoch(val) [0][ 250/1478]    eta: 0:00:24  time: 0.0171  data_time: 0.0016  memory: 494  
+2026/02/05 12:14:20 - mmengine - INFO - Epoch(val) [0][ 300/1478]    eta: 0:00:23  time: 0.0174  data_time: 0.0016  memory: 325  
+2026/02/05 12:14:21 - mmengine - INFO - Epoch(val) [0][ 350/1478]    eta: 0:00:21  time: 0.0179  data_time: 0.0017  memory: 341  
+2026/02/05 12:14:22 - mmengine - INFO - Epoch(val) [0][ 400/1478]    eta: 0:00:20  time: 0.0176  data_time: 0.0017  memory: 337  
+2026/02/05 12:14:23 - mmengine - INFO - Epoch(val) [0][ 450/1478]    eta: 0:00:19  time: 0.0180  data_time: 0.0017  memory: 341  
+2026/02/05 12:14:24 - mmengine - INFO - Epoch(val) [0][ 500/1478]    eta: 0:00:18  time: 0.0177  data_time: 0.0017  memory: 341  
+2026/02/05 12:14:25 - mmengine - INFO - Epoch(val) [0][ 550/1478]    eta: 0:00:17  time: 0.0162  data_time: 0.0014  memory: 340  
+2026/02/05 12:14:26 - mmengine - INFO - Epoch(val) [0][ 600/1478]    eta: 0:00:16  time: 0.0186  data_time: 0.0018  memory: 341  
+2026/02/05 12:14:27 - mmengine - INFO - Epoch(val) [0][ 650/1478]    eta: 0:00:15  time: 0.0176  data_time: 0.0016  memory: 341  
+2026/02/05 12:14:27 - mmengine - INFO - Epoch(val) [0][ 700/1478]    eta: 0:00:14  time: 0.0178  data_time: 0.0017  memory: 340  
+2026/02/05 12:14:28 - mmengine - INFO - Epoch(val) [0][ 750/1478]    eta: 0:00:13  time: 0.0178  data_time: 0.0017  memory: 341  
+2026/02/05 12:14:29 - mmengine - INFO - Epoch(val) [0][ 800/1478]    eta: 0:00:12  time: 0.0191  data_time: 0.0018  memory: 335  
+2026/02/05 12:14:30 - mmengine - INFO - Epoch(val) [0][ 850/1478]    eta: 0:00:11  time: 0.0177  data_time: 0.0017  memory: 341  
+2026/02/05 12:14:31 - mmengine - INFO - Epoch(val) [0][ 900/1478]    eta: 0:00:10  time: 0.0185  data_time: 0.0018  memory: 341  
+2026/02/05 12:14:32 - mmengine - INFO - Epoch(val) [0][ 950/1478]    eta: 0:00:09  time: 0.0186  data_time: 0.0018  memory: 341  
+2026/02/05 12:14:33 - mmengine - INFO - Epoch(val) [0][1000/1478]    eta: 0:00:08  time: 0.0185  data_time: 0.0019  memory: 341  
+2026/02/05 12:14:34 - mmengine - INFO - Epoch(val) [0][1050/1478]    eta: 0:00:07  time: 0.0162  data_time: 0.0015  memory: 340  
+2026/02/05 12:14:35 - mmengine - INFO - Epoch(val) [0][1100/1478]    eta: 0:00:07  time: 0.0189  data_time: 0.0018  memory: 341  
+2026/02/05 12:14:36 - mmengine - INFO - Epoch(val) [0][1150/1478]    eta: 0:00:06  time: 0.0176  data_time: 0.0017  memory: 339  
+2026/02/05 12:14:37 - mmengine - INFO - Epoch(val) [0][1200/1478]    eta: 0:00:05  time: 0.0191  data_time: 0.0020  memory: 341  
+2026/02/05 12:14:38 - mmengine - INFO - Epoch(val) [0][1250/1478]    eta: 0:00:04  time: 0.0170  data_time: 0.0017  memory: 341  
+2026/02/05 12:14:38 - mmengine - INFO - Epoch(val) [0][1300/1478]    eta: 0:00:03  time: 0.0182  data_time: 0.0018  memory: 341  
+2026/02/05 12:14:39 - mmengine - INFO - Epoch(val) [0][1350/1478]    eta: 0:00:02  time: 0.0176  data_time: 0.0017  memory: 328  
+2026/02/05 12:14:40 - mmengine - INFO - Epoch(val) [0][1400/1478]    eta: 0:00:01  time: 0.0183  data_time: 0.0020  memory: 335  
+2026/02/05 12:14:41 - mmengine - INFO - Epoch(val) [0][1450/1478]    eta: 0:00:00  time: 0.0177  data_time: 0.0017  memory: 338  
+2026/02/05 12:14:42 - mmengine - INFO - per class results:
+2026/02/05 12:14:42 - mmengine - INFO - 
++------------+-------+-------+
+|   Class    |  IoU  |  Acc  |
++------------+-------+-------+
+| background | 74.36 | 78.84 |
+|    pet     | 69.63 | 91.19 |
++------------+-------+-------+
+2026/02/05 12:14:42 - mmengine - INFO - Epoch(val) [0][1478/1478]    aAcc: 83.8500  mIoU: 71.9900  mAcc: 85.0100  data_time: 0.0018  time: 0.0185
+2026/02/05 12:14:56 - mmengine - INFO - Epoch(train) [1][850/740]  lr: 3.4942e-04  eta: 0:05:29  time: 0.2877  data_time: 0.0094  memory: 3660  loss: 0.3047  decode.loss_ce: 0.3047  decode.acc_seg: 84.8424
+2026/02/05 12:15:11 - mmengine - INFO - Epoch(train) [1][900/740]  lr: 3.3466e-04  eta: 0:05:15  time: 0.2894  data_time: 0.0093  memory: 3660  loss: 0.2872  decode.loss_ce: 0.2872  decode.acc_seg: 87.7063
+2026/02/05 12:15:25 - mmengine - INFO - Epoch(train) [1][950/740]  lr: 3.1990e-04  eta: 0:05:01  time: 0.2894  data_time: 0.0095  memory: 3659  loss: 0.3104  decode.loss_ce: 0.3104  decode.acc_seg: 80.5050
+2026/02/05 12:15:40 - mmengine - INFO - Exp name: segformer_b0_pets_20260205_120855
+2026/02/05 12:15:40 - mmengine - INFO - Epoch(train) [1][1000/740]  lr: 3.0515e-04  eta: 0:04:47  time: 0.2921  data_time: 0.0096  memory: 3659  loss: 0.2877  decode.loss_ce: 0.2877  decode.acc_seg: 80.3378
+2026/02/05 12:15:40 - mmengine - INFO - Saving checkpoint at 1000 iterations
+2026/02/05 12:15:41 - mmengine - INFO - Epoch(val) [0][  50/1478]    eta: 0:00:25  time: 0.0181  data_time: 0.0018  memory: 339  
+2026/02/05 12:15:42 - mmengine - INFO - Epoch(val) [0][ 100/1478]    eta: 0:00:24  time: 0.0182  data_time: 0.0016  memory: 341  
+2026/02/05 12:15:43 - mmengine - INFO - Epoch(val) [0][ 150/1478]    eta: 0:00:24  time: 0.0186  data_time: 0.0018  memory: 340  
+2026/02/05 12:15:44 - mmengine - INFO - Epoch(val) [0][ 200/1478]    eta: 0:00:23  time: 0.0177  data_time: 0.0017  memory: 338  
+2026/02/05 12:15:45 - mmengine - INFO - Epoch(val) [0][ 250/1478]    eta: 0:00:22  time: 0.0177  data_time: 0.0016  memory: 494  
+2026/02/05 12:15:46 - mmengine - INFO - Epoch(val) [0][ 300/1478]    eta: 0:00:21  time: 0.0190  data_time: 0.0017  memory: 325  
+2026/02/05 12:15:47 - mmengine - INFO - Epoch(val) [0][ 350/1478]    eta: 0:00:20  time: 0.0183  data_time: 0.0018  memory: 341  
+2026/02/05 12:15:47 - mmengine - INFO - Epoch(val) [0][ 400/1478]    eta: 0:00:20  time: 0.0188  data_time: 0.0019  memory: 337  
+2026/02/05 12:15:48 - mmengine - INFO - Epoch(val) [0][ 450/1478]    eta: 0:00:19  time: 0.0176  data_time: 0.0017  memory: 341  
+2026/02/05 12:15:49 - mmengine - INFO - Epoch(val) [0][ 500/1478]    eta: 0:00:18  time: 0.0185  data_time: 0.0019  memory: 341  
+2026/02/05 12:15:50 - mmengine - INFO - Epoch(val) [0][ 550/1478]    eta: 0:00:17  time: 0.0172  data_time: 0.0016  memory: 340  
+2026/02/05 12:15:51 - mmengine - INFO - Epoch(val) [0][ 600/1478]    eta: 0:00:16  time: 0.0188  data_time: 0.0019  memory: 341  
+2026/02/05 12:15:52 - mmengine - INFO - Epoch(val) [0][ 650/1478]    eta: 0:00:15  time: 0.0176  data_time: 0.0016  memory: 341  
+2026/02/05 12:15:53 - mmengine - INFO - Epoch(val) [0][ 700/1478]    eta: 0:00:14  time: 0.0181  data_time: 0.0017  memory: 340  
+2026/02/05 12:15:54 - mmengine - INFO - Epoch(val) [0][ 750/1478]    eta: 0:00:13  time: 0.0179  data_time: 0.0018  memory: 341  
+2026/02/05 12:15:55 - mmengine - INFO - Epoch(val) [0][ 800/1478]    eta: 0:00:12  time: 0.0179  data_time: 0.0017  memory: 335  
+2026/02/05 12:15:56 - mmengine - INFO - Epoch(val) [0][ 850/1478]    eta: 0:00:11  time: 0.0179  data_time: 0.0016  memory: 341  
+2026/02/05 12:15:57 - mmengine - INFO - Epoch(val) [0][ 900/1478]    eta: 0:00:10  time: 0.0179  data_time: 0.0017  memory: 341  
+2026/02/05 12:15:58 - mmengine - INFO - Epoch(val) [0][ 950/1478]    eta: 0:00:09  time: 0.0176  data_time: 0.0016  memory: 341  
+2026/02/05 12:15:58 - mmengine - INFO - Epoch(val) [0][1000/1478]    eta: 0:00:08  time: 0.0178  data_time: 0.0017  memory: 341  
+2026/02/05 12:15:59 - mmengine - INFO - Epoch(val) [0][1050/1478]    eta: 0:00:07  time: 0.0163  data_time: 0.0015  memory: 340  
+2026/02/05 12:16:00 - mmengine - INFO - Epoch(val) [0][1100/1478]    eta: 0:00:06  time: 0.0180  data_time: 0.0017  memory: 341  
+2026/02/05 12:16:01 - mmengine - INFO - Epoch(val) [0][1150/1478]    eta: 0:00:06  time: 0.0173  data_time: 0.0016  memory: 339  
+2026/02/05 12:16:02 - mmengine - INFO - Epoch(val) [0][1200/1478]    eta: 0:00:05  time: 0.0173  data_time: 0.0016  memory: 341  
+2026/02/05 12:16:03 - mmengine - INFO - Epoch(val) [0][1250/1478]    eta: 0:00:04  time: 0.0172  data_time: 0.0016  memory: 341  
+2026/02/05 12:16:04 - mmengine - INFO - Epoch(val) [0][1300/1478]    eta: 0:00:03  time: 0.0175  data_time: 0.0017  memory: 341  
+2026/02/05 12:16:05 - mmengine - INFO - Epoch(val) [0][1350/1478]    eta: 0:00:02  time: 0.0172  data_time: 0.0016  memory: 328  
+2026/02/05 12:16:06 - mmengine - INFO - Epoch(val) [0][1400/1478]    eta: 0:00:01  time: 0.0181  data_time: 0.0017  memory: 335  
+2026/02/05 12:16:06 - mmengine - INFO - Epoch(val) [0][1450/1478]    eta: 0:00:00  time: 0.0176  data_time: 0.0016  memory: 338  
+2026/02/05 12:16:07 - mmengine - INFO - per class results:
+2026/02/05 12:16:07 - mmengine - INFO - 
++------------+-------+-------+
+|   Class    |  IoU  |  Acc  |
++------------+-------+-------+
+| background | 76.52 | 81.24 |
+|    pet     | 71.37 | 90.97 |
++------------+-------+-------+
+2026/02/05 12:16:07 - mmengine - INFO - Epoch(val) [0][1478/1478]    aAcc: 85.1900  mIoU: 73.9500  mAcc: 86.1000  data_time: 0.0018  time: 0.0182
+2026/02/05 12:16:22 - mmengine - INFO - Epoch(train) [1][1050/740]  lr: 2.9039e-04  eta: 0:04:32  time: 0.2897  data_time: 0.0095  memory: 3658  loss: 0.2629  decode.loss_ce: 0.2629  decode.acc_seg: 88.0246
+2026/02/05 12:16:36 - mmengine - INFO - Epoch(train) [1][1100/740]  lr: 2.7563e-04  eta: 0:04:18  time: 0.2914  data_time: 0.0096  memory: 3660  loss: 0.2906  decode.loss_ce: 0.2906  decode.acc_seg: 67.4283
+2026/02/05 12:16:51 - mmengine - INFO - Epoch(train) [1][1150/740]  lr: 2.6088e-04  eta: 0:04:04  time: 0.2917  data_time: 0.0097  memory: 3659  loss: 0.2458  decode.loss_ce: 0.2458  decode.acc_seg: 90.4760
+2026/02/05 12:17:05 - mmengine - INFO - Epoch(train) [1][1200/740]  lr: 2.4612e-04  eta: 0:03:50  time: 0.2927  data_time: 0.0099  memory: 3659  loss: 0.2406  decode.loss_ce: 0.2406  decode.acc_seg: 79.0675
+2026/02/05 12:17:05 - mmengine - INFO - Saving checkpoint at 1200 iterations
+2026/02/05 12:17:07 - mmengine - INFO - Epoch(val) [0][  50/1478]    eta: 0:00:25  time: 0.0178  data_time: 0.0017  memory: 339  
+2026/02/05 12:17:08 - mmengine - INFO - Epoch(val) [0][ 100/1478]    eta: 0:00:24  time: 0.0179  data_time: 0.0017  memory: 341  
+2026/02/05 12:17:08 - mmengine - INFO - Epoch(val) [0][ 150/1478]    eta: 0:00:23  time: 0.0184  data_time: 0.0018  memory: 340  
+2026/02/05 12:17:09 - mmengine - INFO - Epoch(val) [0][ 200/1478]    eta: 0:00:22  time: 0.0174  data_time: 0.0016  memory: 338  
+2026/02/05 12:17:10 - mmengine - INFO - Epoch(val) [0][ 250/1478]    eta: 0:00:22  time: 0.0182  data_time: 0.0017  memory: 494  
+2026/02/05 12:17:11 - mmengine - INFO - Epoch(val) [0][ 300/1478]    eta: 0:00:21  time: 0.0179  data_time: 0.0016  memory: 325  
+2026/02/05 12:17:12 - mmengine - INFO - Epoch(val) [0][ 350/1478]    eta: 0:00:20  time: 0.0179  data_time: 0.0018  memory: 341  
+2026/02/05 12:17:13 - mmengine - INFO - Epoch(val) [0][ 400/1478]    eta: 0:00:19  time: 0.0176  data_time: 0.0017  memory: 337  
+2026/02/05 12:17:14 - mmengine - INFO - Epoch(val) [0][ 450/1478]    eta: 0:00:18  time: 0.0171  data_time: 0.0016  memory: 341  
+2026/02/05 12:17:15 - mmengine - INFO - Epoch(val) [0][ 500/1478]    eta: 0:00:17  time: 0.0179  data_time: 0.0018  memory: 341  
+2026/02/05 12:17:16 - mmengine - INFO - Epoch(val) [0][ 550/1478]    eta: 0:00:16  time: 0.0169  data_time: 0.0016  memory: 340  
+2026/02/05 12:17:17 - mmengine - INFO - Epoch(val) [0][ 600/1478]    eta: 0:00:16  time: 0.0181  data_time: 0.0017  memory: 341  
+2026/02/05 12:17:18 - mmengine - INFO - Epoch(val) [0][ 650/1478]    eta: 0:00:15  time: 0.0181  data_time: 0.0018  memory: 341  
+2026/02/05 12:17:19 - mmengine - INFO - Epoch(val) [0][ 700/1478]    eta: 0:00:14  time: 0.0176  data_time: 0.0017  memory: 340  
+2026/02/05 12:17:19 - mmengine - INFO - Epoch(val) [0][ 750/1478]    eta: 0:00:13  time: 0.0181  data_time: 0.0017  memory: 341  
+2026/02/05 12:17:20 - mmengine - INFO - Epoch(val) [0][ 800/1478]    eta: 0:00:12  time: 0.0178  data_time: 0.0016  memory: 335  
+2026/02/05 12:17:21 - mmengine - INFO - Epoch(val) [0][ 850/1478]    eta: 0:00:11  time: 0.0185  data_time: 0.0018  memory: 341  
+2026/02/05 12:17:22 - mmengine - INFO - Epoch(val) [0][ 900/1478]    eta: 0:00:10  time: 0.0177  data_time: 0.0017  memory: 341  
+2026/02/05 12:17:23 - mmengine - INFO - Epoch(val) [0][ 950/1478]    eta: 0:00:09  time: 0.0186  data_time: 0.0019  memory: 341  
+2026/02/05 12:17:24 - mmengine - INFO - Epoch(val) [0][1000/1478]    eta: 0:00:08  time: 0.0178  data_time: 0.0017  memory: 341  
+2026/02/05 12:17:25 - mmengine - INFO - Epoch(val) [0][1050/1478]    eta: 0:00:07  time: 0.0179  data_time: 0.0017  memory: 340  
+2026/02/05 12:17:26 - mmengine - INFO - Epoch(val) [0][1100/1478]    eta: 0:00:06  time: 0.0180  data_time: 0.0017  memory: 341  
+2026/02/05 12:17:27 - mmengine - INFO - Epoch(val) [0][1150/1478]    eta: 0:00:05  time: 0.0179  data_time: 0.0017  memory: 339  
+2026/02/05 12:17:28 - mmengine - INFO - Epoch(val) [0][1200/1478]    eta: 0:00:05  time: 0.0182  data_time: 0.0017  memory: 341  
+2026/02/05 12:17:29 - mmengine - INFO - Epoch(val) [0][1250/1478]    eta: 0:00:04  time: 0.0178  data_time: 0.0017  memory: 341  
+2026/02/05 12:17:29 - mmengine - INFO - Epoch(val) [0][1300/1478]    eta: 0:00:03  time: 0.0174  data_time: 0.0016  memory: 341  
+2026/02/05 12:17:30 - mmengine - INFO - Epoch(val) [0][1350/1478]    eta: 0:00:02  time: 0.0183  data_time: 0.0017  memory: 328  
+2026/02/05 12:17:31 - mmengine - INFO - Epoch(val) [0][1400/1478]    eta: 0:00:01  time: 0.0176  data_time: 0.0016  memory: 335  
+2026/02/05 12:17:32 - mmengine - INFO - Epoch(val) [0][1450/1478]    eta: 0:00:00  time: 0.0181  data_time: 0.0017  memory: 338  
+2026/02/05 12:17:33 - mmengine - INFO - per class results:
+2026/02/05 12:17:33 - mmengine - INFO - 
++------------+-------+-------+
+|   Class    |  IoU  |  Acc  |
++------------+-------+-------+
+| background | 76.87 | 80.59 |
+|    pet     | 72.37 | 92.93 |
++------------+-------+-------+
+2026/02/05 12:17:33 - mmengine - INFO - Epoch(val) [0][1478/1478]    aAcc: 85.6000  mIoU: 74.6200  mAcc: 86.7600  data_time: 0.0018  time: 0.0182
+2026/02/05 12:17:47 - mmengine - INFO - Epoch(train) [1][1250/740]  lr: 2.3136e-04  eta: 0:03:35  time: 0.2915  data_time: 0.0102  memory: 3659  loss: 0.2632  decode.loss_ce: 0.2632  decode.acc_seg: 88.2061
+2026/02/05 12:18:02 - mmengine - INFO - Epoch(train) [1][1300/740]  lr: 2.1660e-04  eta: 0:03:21  time: 0.2910  data_time: 0.0100  memory: 3660  loss: 0.2371  decode.loss_ce: 0.2371  decode.acc_seg: 86.2971
+2026/02/05 12:18:17 - mmengine - INFO - Epoch(train) [1][1350/740]  lr: 2.0185e-04  eta: 0:03:07  time: 0.2929  data_time: 0.0096  memory: 3659  loss: 0.2449  decode.loss_ce: 0.2449  decode.acc_seg: 91.6861
+2026/02/05 12:18:31 - mmengine - INFO - Epoch(train) [1][1400/740]  lr: 1.8709e-04  eta: 0:02:53  time: 0.2940  data_time: 0.0098  memory: 3659  loss: 0.2546  decode.loss_ce: 0.2546  decode.acc_seg: 93.9143
+2026/02/05 12:18:31 - mmengine - INFO - Saving checkpoint at 1400 iterations
+2026/02/05 12:18:32 - mmengine - INFO - Epoch(val) [0][  50/1478]    eta: 0:00:25  time: 0.0176  data_time: 0.0017  memory: 339  
+2026/02/05 12:18:33 - mmengine - INFO - Epoch(val) [0][ 100/1478]    eta: 0:00:24  time: 0.0171  data_time: 0.0016  memory: 341  
+2026/02/05 12:18:34 - mmengine - INFO - Epoch(val) [0][ 150/1478]    eta: 0:00:24  time: 0.0180  data_time: 0.0017  memory: 340  
+2026/02/05 12:18:35 - mmengine - INFO - Epoch(val) [0][ 200/1478]    eta: 0:00:23  time: 0.0195  data_time: 0.0019  memory: 338  
+2026/02/05 12:18:36 - mmengine - INFO - Epoch(val) [0][ 250/1478]    eta: 0:00:22  time: 0.0178  data_time: 0.0017  memory: 494  
+2026/02/05 12:18:37 - mmengine - INFO - Epoch(val) [0][ 300/1478]    eta: 0:00:21  time: 0.0184  data_time: 0.0018  memory: 325  
+2026/02/05 12:18:38 - mmengine - INFO - Epoch(val) [0][ 350/1478]    eta: 0:00:20  time: 0.0179  data_time: 0.0018  memory: 341  
+2026/02/05 12:18:39 - mmengine - INFO - Epoch(val) [0][ 400/1478]    eta: 0:00:19  time: 0.0192  data_time: 0.0020  memory: 337  
+2026/02/05 12:18:40 - mmengine - INFO - Epoch(val) [0][ 450/1478]    eta: 0:00:18  time: 0.0177  data_time: 0.0016  memory: 341  
+2026/02/05 12:18:41 - mmengine - INFO - Epoch(val) [0][ 500/1478]    eta: 0:00:18  time: 0.0191  data_time: 0.0018  memory: 341  
+2026/02/05 12:18:42 - mmengine - INFO - Epoch(val) [0][ 550/1478]    eta: 0:00:17  time: 0.0179  data_time: 0.0017  memory: 340  
+2026/02/05 12:18:43 - mmengine - INFO - Epoch(val) [0][ 600/1478]    eta: 0:00:16  time: 0.0183  data_time: 0.0017  memory: 341  
+2026/02/05 12:18:43 - mmengine - INFO - Epoch(val) [0][ 650/1478]    eta: 0:00:15  time: 0.0177  data_time: 0.0016  memory: 341  
+2026/02/05 12:18:44 - mmengine - INFO - Epoch(val) [0][ 700/1478]    eta: 0:00:14  time: 0.0176  data_time: 0.0018  memory: 340  
+2026/02/05 12:18:45 - mmengine - INFO - Epoch(val) [0][ 750/1478]    eta: 0:00:13  time: 0.0188  data_time: 0.0018  memory: 341  
+2026/02/05 12:18:46 - mmengine - INFO - Epoch(val) [0][ 800/1478]    eta: 0:00:12  time: 0.0186  data_time: 0.0018  memory: 335  
+2026/02/05 12:18:47 - mmengine - INFO - Epoch(val) [0][ 850/1478]    eta: 0:00:11  time: 0.0191  data_time: 0.0019  memory: 341  
+2026/02/05 12:18:48 - mmengine - INFO - Epoch(val) [0][ 900/1478]    eta: 0:00:10  time: 0.0177  data_time: 0.0016  memory: 341  
+2026/02/05 12:18:49 - mmengine - INFO - Epoch(val) [0][ 950/1478]    eta: 0:00:09  time: 0.0184  data_time: 0.0017  memory: 341  
+2026/02/05 12:18:50 - mmengine - INFO - Epoch(val) [0][1000/1478]    eta: 0:00:08  time: 0.0195  data_time: 0.0019  memory: 341  
+2026/02/05 12:18:51 - mmengine - INFO - Epoch(val) [0][1050/1478]    eta: 0:00:07  time: 0.0173  data_time: 0.0016  memory: 340  
+2026/02/05 12:18:52 - mmengine - INFO - Epoch(val) [0][1100/1478]    eta: 0:00:06  time: 0.0181  data_time: 0.0018  memory: 341  
+2026/02/05 12:18:53 - mmengine - INFO - Epoch(val) [0][1150/1478]    eta: 0:00:06  time: 0.0183  data_time: 0.0018  memory: 339  
+2026/02/05 12:18:54 - mmengine - INFO - Epoch(val) [0][1200/1478]    eta: 0:00:05  time: 0.0180  data_time: 0.0018  memory: 341  
+2026/02/05 12:18:55 - mmengine - INFO - Epoch(val) [0][1250/1478]    eta: 0:00:04  time: 0.0174  data_time: 0.0016  memory: 341  
+2026/02/05 12:18:56 - mmengine - INFO - Epoch(val) [0][1300/1478]    eta: 0:00:03  time: 0.0179  data_time: 0.0017  memory: 341  
+2026/02/05 12:18:56 - mmengine - INFO - Epoch(val) [0][1350/1478]    eta: 0:00:02  time: 0.0179  data_time: 0.0017  memory: 328  
+2026/02/05 12:18:57 - mmengine - INFO - Epoch(val) [0][1400/1478]    eta: 0:00:01  time: 0.0174  data_time: 0.0016  memory: 335  
+2026/02/05 12:18:58 - mmengine - INFO - Epoch(val) [0][1450/1478]    eta: 0:00:00  time: 0.0176  data_time: 0.0016  memory: 338  
+2026/02/05 12:18:59 - mmengine - INFO - per class results:
+2026/02/05 12:18:59 - mmengine - INFO - 
++------------+-------+-------+
+|   Class    |  IoU  |  Acc  |
++------------+-------+-------+
+| background | 77.62 | 81.01 |
+|    pet     | 73.25 | 93.61 |
++------------+-------+-------+
+2026/02/05 12:18:59 - mmengine - INFO - Epoch(val) [0][1478/1478]    aAcc: 86.1200  mIoU: 75.4400  mAcc: 87.3100  data_time: 0.0018  time: 0.0184
+2026/02/05 12:19:13 - mmengine - INFO - Epoch(train) [1][1450/740]  lr: 1.7233e-04  eta: 0:02:38  time: 0.2931  data_time: 0.0099  memory: 3659  loss: 0.2048  decode.loss_ce: 0.2048  decode.acc_seg: 86.3564
+2026/02/05 12:19:28 - mmengine - INFO - Epoch(train) [1][1500/740]  lr: 1.5757e-04  eta: 0:02:24  time: 0.2938  data_time: 0.0098  memory: 3658  loss: 0.2754  decode.loss_ce: 0.2754  decode.acc_seg: 84.6108
+2026/02/05 12:19:43 - mmengine - INFO - Epoch(train) [1][1550/740]  lr: 1.4282e-04  eta: 0:02:10  time: 0.2948  data_time: 0.0100  memory: 3659  loss: 0.2319  decode.loss_ce: 0.2319  decode.acc_seg: 86.2352
+2026/02/05 12:19:58 - mmengine - INFO - Epoch(train) [1][1600/740]  lr: 1.2806e-04  eta: 0:01:55  time: 0.2965  data_time: 0.0100  memory: 3660  loss: 0.2620  decode.loss_ce: 0.2620  decode.acc_seg: 85.3018
+2026/02/05 12:19:58 - mmengine - INFO - Saving checkpoint at 1600 iterations
+2026/02/05 12:19:59 - mmengine - INFO - Epoch(val) [0][  50/1478]    eta: 0:00:25  time: 0.0177  data_time: 0.0017  memory: 339  
+2026/02/05 12:20:00 - mmengine - INFO - Epoch(val) [0][ 100/1478]    eta: 0:00:24  time: 0.0185  data_time: 0.0018  memory: 341  
+2026/02/05 12:20:01 - mmengine - INFO - Epoch(val) [0][ 150/1478]    eta: 0:00:24  time: 0.0183  data_time: 0.0018  memory: 340  
+2026/02/05 12:20:01 - mmengine - INFO - Epoch(val) [0][ 200/1478]    eta: 0:00:23  time: 0.0176  data_time: 0.0016  memory: 338  
+2026/02/05 12:20:02 - mmengine - INFO - Epoch(val) [0][ 250/1478]    eta: 0:00:22  time: 0.0174  data_time: 0.0016  memory: 494  
+2026/02/05 12:20:03 - mmengine - INFO - Epoch(val) [0][ 300/1478]    eta: 0:00:21  time: 0.0183  data_time: 0.0016  memory: 325  
+2026/02/05 12:20:04 - mmengine - INFO - Epoch(val) [0][ 350/1478]    eta: 0:00:20  time: 0.0182  data_time: 0.0017  memory: 341  
+2026/02/05 12:20:05 - mmengine - INFO - Epoch(val) [0][ 400/1478]    eta: 0:00:19  time: 0.0181  data_time: 0.0018  memory: 337  
+2026/02/05 12:20:06 - mmengine - INFO - Epoch(val) [0][ 450/1478]    eta: 0:00:19  time: 0.0181  data_time: 0.0018  memory: 341  
+2026/02/05 12:20:07 - mmengine - INFO - Epoch(val) [0][ 500/1478]    eta: 0:00:18  time: 0.0180  data_time: 0.0019  memory: 341  
+2026/02/05 12:20:08 - mmengine - INFO - Epoch(val) [0][ 550/1478]    eta: 0:00:17  time: 0.0173  data_time: 0.0016  memory: 340  
+2026/02/05 12:20:09 - mmengine - INFO - Epoch(val) [0][ 600/1478]    eta: 0:00:16  time: 0.0175  data_time: 0.0016  memory: 341  
+2026/02/05 12:20:10 - mmengine - INFO - Epoch(val) [0][ 650/1478]    eta: 0:00:15  time: 0.0178  data_time: 0.0016  memory: 341  
+2026/02/05 12:20:11 - mmengine - INFO - Epoch(val) [0][ 700/1478]    eta: 0:00:14  time: 0.0172  data_time: 0.0017  memory: 340  
+2026/02/05 12:20:12 - mmengine - INFO - Epoch(val) [0][ 750/1478]    eta: 0:00:13  time: 0.0168  data_time: 0.0016  memory: 341  
+2026/02/05 12:20:12 - mmengine - INFO - Epoch(val) [0][ 800/1478]    eta: 0:00:12  time: 0.0177  data_time: 0.0018  memory: 335  
+2026/02/05 12:20:13 - mmengine - INFO - Epoch(val) [0][ 850/1478]    eta: 0:00:11  time: 0.0173  data_time: 0.0017  memory: 341  
+2026/02/05 12:20:14 - mmengine - INFO - Epoch(val) [0][ 900/1478]    eta: 0:00:10  time: 0.0174  data_time: 0.0017  memory: 341  
+2026/02/05 12:20:15 - mmengine - INFO - Epoch(val) [0][ 950/1478]    eta: 0:00:09  time: 0.0175  data_time: 0.0017  memory: 341  
+2026/02/05 12:20:16 - mmengine - INFO - Epoch(val) [0][1000/1478]    eta: 0:00:08  time: 0.0172  data_time: 0.0017  memory: 341  
+2026/02/05 12:20:17 - mmengine - INFO - Epoch(val) [0][1050/1478]    eta: 0:00:07  time: 0.0159  data_time: 0.0015  memory: 340  
+2026/02/05 12:20:18 - mmengine - INFO - Epoch(val) [0][1100/1478]    eta: 0:00:06  time: 0.0173  data_time: 0.0016  memory: 341  
+2026/02/05 12:20:19 - mmengine - INFO - Epoch(val) [0][1150/1478]    eta: 0:00:05  time: 0.0172  data_time: 0.0017  memory: 339  
+2026/02/05 12:20:20 - mmengine - INFO - Epoch(val) [0][1200/1478]    eta: 0:00:05  time: 0.0175  data_time: 0.0017  memory: 341  
+2026/02/05 12:20:20 - mmengine - INFO - Epoch(val) [0][1250/1478]    eta: 0:00:04  time: 0.0179  data_time: 0.0017  memory: 341  
+2026/02/05 12:20:21 - mmengine - INFO - Epoch(val) [0][1300/1478]    eta: 0:00:03  time: 0.0171  data_time: 0.0016  memory: 341  
+2026/02/05 12:20:22 - mmengine - INFO - Epoch(val) [0][1350/1478]    eta: 0:00:02  time: 0.0171  data_time: 0.0015  memory: 328  
+2026/02/05 12:20:23 - mmengine - INFO - Epoch(val) [0][1400/1478]    eta: 0:00:01  time: 0.0185  data_time: 0.0016  memory: 335  
+2026/02/05 12:20:24 - mmengine - INFO - Epoch(val) [0][1450/1478]    eta: 0:00:00  time: 0.0184  data_time: 0.0018  memory: 338  
+2026/02/05 12:20:25 - mmengine - INFO - per class results:
+2026/02/05 12:20:25 - mmengine - INFO - 
++------------+-------+-------+
+|   Class    |  IoU  |  Acc  |
++------------+-------+-------+
+| background | 81.06 | 85.64 |
+|    pet     | 75.81 | 91.74 |
++------------+-------+-------+
+2026/02/05 12:20:25 - mmengine - INFO - Epoch(val) [0][1478/1478]    aAcc: 88.1200  mIoU: 78.4400  mAcc: 88.6900  data_time: 0.0018  time: 0.0181
+2026/02/05 12:20:39 - mmengine - INFO - Epoch(train) [1][1650/740]  lr: 1.1330e-04  eta: 0:01:41  time: 0.2936  data_time: 0.0116  memory: 3660  loss: 0.2049  decode.loss_ce: 0.2049  decode.acc_seg: 93.8616
+2026/02/05 12:20:54 - mmengine - INFO - Epoch(train) [1][1700/740]  lr: 9.8544e-05  eta: 0:01:26  time: 0.2908  data_time: 0.0093  memory: 3660  loss: 0.2256  decode.loss_ce: 0.2256  decode.acc_seg: 84.4228
+2026/02/05 12:21:08 - mmengine - INFO - Epoch(train) [1][1750/740]  lr: 8.3787e-05  eta: 0:01:12  time: 0.2919  data_time: 0.0096  memory: 3660  loss: 0.2617  decode.loss_ce: 0.2617  decode.acc_seg: 90.9444
+2026/02/05 12:21:23 - mmengine - INFO - Epoch(train) [1][1800/740]  lr: 6.9030e-05  eta: 0:00:57  time: 0.2903  data_time: 0.0092  memory: 3658  loss: 0.2541  decode.loss_ce: 0.2541  decode.acc_seg: 77.5773
+2026/02/05 12:21:23 - mmengine - INFO - Saving checkpoint at 1800 iterations
+2026/02/05 12:21:24 - mmengine - INFO - Epoch(val) [0][  50/1478]    eta: 0:00:25  time: 0.0174  data_time: 0.0017  memory: 339  
+2026/02/05 12:21:25 - mmengine - INFO - Epoch(val) [0][ 100/1478]    eta: 0:00:24  time: 0.0197  data_time: 0.0020  memory: 341  
+2026/02/05 12:21:26 - mmengine - INFO - Epoch(val) [0][ 150/1478]    eta: 0:00:23  time: 0.0181  data_time: 0.0018  memory: 340  
+2026/02/05 12:21:27 - mmengine - INFO - Epoch(val) [0][ 200/1478]    eta: 0:00:22  time: 0.0173  data_time: 0.0016  memory: 338  
+2026/02/05 12:21:28 - mmengine - INFO - Epoch(val) [0][ 250/1478]    eta: 0:00:22  time: 0.0170  data_time: 0.0016  memory: 494  
+2026/02/05 12:21:29 - mmengine - INFO - Epoch(val) [0][ 300/1478]    eta: 0:00:21  time: 0.0178  data_time: 0.0016  memory: 325  
+2026/02/05 12:21:30 - mmengine - INFO - Epoch(val) [0][ 350/1478]    eta: 0:00:20  time: 0.0168  data_time: 0.0015  memory: 341  
+2026/02/05 12:21:31 - mmengine - INFO - Epoch(val) [0][ 400/1478]    eta: 0:00:19  time: 0.0183  data_time: 0.0019  memory: 337  
+2026/02/05 12:21:31 - mmengine - INFO - Epoch(val) [0][ 450/1478]    eta: 0:00:18  time: 0.0169  data_time: 0.0015  memory: 341  
+2026/02/05 12:21:32 - mmengine - INFO - Epoch(val) [0][ 500/1478]    eta: 0:00:17  time: 0.0171  data_time: 0.0015  memory: 341  
+2026/02/05 12:21:33 - mmengine - INFO - Epoch(val) [0][ 550/1478]    eta: 0:00:16  time: 0.0163  data_time: 0.0015  memory: 340  
+2026/02/05 12:21:34 - mmengine - INFO - Epoch(val) [0][ 600/1478]    eta: 0:00:15  time: 0.0181  data_time: 0.0018  memory: 341  
+2026/02/05 12:21:35 - mmengine - INFO - Epoch(val) [0][ 650/1478]    eta: 0:00:15  time: 0.0177  data_time: 0.0017  memory: 341  
+2026/02/05 12:21:36 - mmengine - INFO - Epoch(val) [0][ 700/1478]    eta: 0:00:14  time: 0.0166  data_time: 0.0015  memory: 340  
+2026/02/05 12:21:37 - mmengine - INFO - Epoch(val) [0][ 750/1478]    eta: 0:00:13  time: 0.0176  data_time: 0.0016  memory: 341  
+2026/02/05 12:21:38 - mmengine - INFO - Epoch(val) [0][ 800/1478]    eta: 0:00:12  time: 0.0175  data_time: 0.0017  memory: 335  
+2026/02/05 12:21:39 - mmengine - INFO - Epoch(val) [0][ 850/1478]    eta: 0:00:11  time: 0.0173  data_time: 0.0017  memory: 341  
+2026/02/05 12:21:40 - mmengine - INFO - Epoch(val) [0][ 900/1478]    eta: 0:00:10  time: 0.0176  data_time: 0.0016  memory: 341  
+2026/02/05 12:21:41 - mmengine - INFO - Epoch(val) [0][ 950/1478]    eta: 0:00:09  time: 0.0182  data_time: 0.0016  memory: 341  
+2026/02/05 12:21:42 - mmengine - INFO - Epoch(val) [0][1000/1478]    eta: 0:00:08  time: 0.0178  data_time: 0.0016  memory: 341  
+2026/02/05 12:21:42 - mmengine - INFO - Epoch(val) [0][1050/1478]    eta: 0:00:07  time: 0.0156  data_time: 0.0013  memory: 340  
+2026/02/05 12:21:43 - mmengine - INFO - Epoch(val) [0][1100/1478]    eta: 0:00:06  time: 0.0173  data_time: 0.0016  memory: 341  
+2026/02/05 12:21:44 - mmengine - INFO - Epoch(val) [0][1150/1478]    eta: 0:00:05  time: 0.0164  data_time: 0.0014  memory: 339  
+2026/02/05 12:21:45 - mmengine - INFO - Epoch(val) [0][1200/1478]    eta: 0:00:05  time: 0.0185  data_time: 0.0016  memory: 341  
+2026/02/05 12:21:46 - mmengine - INFO - Epoch(val) [0][1250/1478]    eta: 0:00:04  time: 0.0182  data_time: 0.0017  memory: 341  
+2026/02/05 12:21:47 - mmengine - INFO - Epoch(val) [0][1300/1478]    eta: 0:00:03  time: 0.0173  data_time: 0.0016  memory: 341  
+2026/02/05 12:21:48 - mmengine - INFO - Epoch(val) [0][1350/1478]    eta: 0:00:02  time: 0.0181  data_time: 0.0018  memory: 328  
+2026/02/05 12:21:49 - mmengine - INFO - Epoch(val) [0][1400/1478]    eta: 0:00:01  time: 0.0173  data_time: 0.0016  memory: 335  
+2026/02/05 12:21:49 - mmengine - INFO - Epoch(val) [0][1450/1478]    eta: 0:00:00  time: 0.0169  data_time: 0.0015  memory: 338  
+2026/02/05 12:21:50 - mmengine - INFO - per class results:
+2026/02/05 12:21:50 - mmengine - INFO - 
++------------+-------+-------+
+|   Class    |  IoU  |  Acc  |
++------------+-------+-------+
+| background | 81.97 | 86.38 |
+|    pet     | 76.81 | 92.11 |
++------------+-------+-------+
+2026/02/05 12:21:50 - mmengine - INFO - Epoch(val) [0][1478/1478]    aAcc: 88.7100  mIoU: 79.3900  mAcc: 89.2500  data_time: 0.0017  time: 0.0180
+2026/02/05 12:22:05 - mmengine - INFO - Epoch(train) [1][1850/740]  lr: 5.4272e-05  eta: 0:00:43  time: 0.2897  data_time: 0.0091  memory: 3660  loss: 0.2234  decode.loss_ce: 0.2234  decode.acc_seg: 85.9807
+2026/02/05 12:22:19 - mmengine - INFO - Epoch(train) [1][1900/740]  lr: 3.9515e-05  eta: 0:00:28  time: 0.2909  data_time: 0.0092  memory: 3658  loss: 0.2027  decode.loss_ce: 0.2027  decode.acc_seg: 90.0446
+2026/02/05 12:22:34 - mmengine - INFO - Epoch(train) [1][1950/740]  lr: 2.4757e-05  eta: 0:00:14  time: 0.2912  data_time: 0.0093  memory: 3659  loss: 0.1969  decode.loss_ce: 0.1969  decode.acc_seg: 91.1752
+2026/02/05 12:22:48 - mmengine - INFO - Exp name: segformer_b0_pets_20260205_120855
+2026/02/05 12:22:48 - mmengine - INFO - Epoch(train) [1][2000/740]  lr: 1.0000e-05  eta: 0:00:00  time: 0.2929  data_time: 0.0100  memory: 3660  loss: 0.2270  decode.loss_ce: 0.2270  decode.acc_seg: 88.9154
+2026/02/05 12:22:48 - mmengine - INFO - Saving checkpoint at 2000 iterations
+2026/02/05 12:22:49 - mmengine - INFO - Epoch(val) [0][  50/1478]    eta: 0:00:24  time: 0.0168  data_time: 0.0015  memory: 339  
+2026/02/05 12:22:50 - mmengine - INFO - Epoch(val) [0][ 100/1478]    eta: 0:00:24  time: 0.0169  data_time: 0.0015  memory: 341  
+2026/02/05 12:22:51 - mmengine - INFO - Epoch(val) [0][ 150/1478]    eta: 0:00:23  time: 0.0181  data_time: 0.0019  memory: 340  
+2026/02/05 12:22:52 - mmengine - INFO - Epoch(val) [0][ 200/1478]    eta: 0:00:22  time: 0.0172  data_time: 0.0016  memory: 338  
+2026/02/05 12:22:53 - mmengine - INFO - Epoch(val) [0][ 250/1478]    eta: 0:00:22  time: 0.0165  data_time: 0.0013  memory: 494  
+2026/02/05 12:22:54 - mmengine - INFO - Epoch(val) [0][ 300/1478]    eta: 0:00:21  time: 0.0172  data_time: 0.0015  memory: 325  
+2026/02/05 12:22:55 - mmengine - INFO - Epoch(val) [0][ 350/1478]    eta: 0:00:20  time: 0.0175  data_time: 0.0017  memory: 341  
+2026/02/05 12:22:56 - mmengine - INFO - Epoch(val) [0][ 400/1478]    eta: 0:00:19  time: 0.0173  data_time: 0.0016  memory: 337  
+2026/02/05 12:22:57 - mmengine - INFO - Epoch(val) [0][ 450/1478]    eta: 0:00:18  time: 0.0176  data_time: 0.0017  memory: 341  
+2026/02/05 12:22:57 - mmengine - INFO - Epoch(val) [0][ 500/1478]    eta: 0:00:17  time: 0.0169  data_time: 0.0016  memory: 341  
+2026/02/05 12:22:58 - mmengine - INFO - Epoch(val) [0][ 550/1478]    eta: 0:00:16  time: 0.0161  data_time: 0.0014  memory: 340  
+2026/02/05 12:22:59 - mmengine - INFO - Epoch(val) [0][ 600/1478]    eta: 0:00:15  time: 0.0168  data_time: 0.0016  memory: 341  
+2026/02/05 12:23:00 - mmengine - INFO - Epoch(val) [0][ 650/1478]    eta: 0:00:14  time: 0.0187  data_time: 0.0018  memory: 341  
+2026/02/05 12:23:01 - mmengine - INFO - Epoch(val) [0][ 700/1478]    eta: 0:00:13  time: 0.0171  data_time: 0.0016  memory: 340  
+2026/02/05 12:23:02 - mmengine - INFO - Epoch(val) [0][ 750/1478]    eta: 0:00:12  time: 0.0173  data_time: 0.0016  memory: 341  
+2026/02/05 12:23:03 - mmengine - INFO - Epoch(val) [0][ 800/1478]    eta: 0:00:12  time: 0.0175  data_time: 0.0017  memory: 335  
+2026/02/05 12:23:04 - mmengine - INFO - Epoch(val) [0][ 850/1478]    eta: 0:00:11  time: 0.0174  data_time: 0.0016  memory: 341  
+2026/02/05 12:23:05 - mmengine - INFO - Epoch(val) [0][ 900/1478]    eta: 0:00:10  time: 0.0174  data_time: 0.0016  memory: 341  
+2026/02/05 12:23:05 - mmengine - INFO - Epoch(val) [0][ 950/1478]    eta: 0:00:09  time: 0.0179  data_time: 0.0017  memory: 341  
+2026/02/05 12:23:06 - mmengine - INFO - Epoch(val) [0][1000/1478]    eta: 0:00:08  time: 0.0171  data_time: 0.0016  memory: 341  
+2026/02/05 12:23:07 - mmengine - INFO - Epoch(val) [0][1050/1478]    eta: 0:00:07  time: 0.0165  data_time: 0.0015  memory: 340  
+2026/02/05 12:23:08 - mmengine - INFO - Epoch(val) [0][1100/1478]    eta: 0:00:06  time: 0.0169  data_time: 0.0015  memory: 341  
+2026/02/05 12:23:09 - mmengine - INFO - Epoch(val) [0][1150/1478]    eta: 0:00:05  time: 0.0168  data_time: 0.0015  memory: 339  
+2026/02/05 12:23:10 - mmengine - INFO - Epoch(val) [0][1200/1478]    eta: 0:00:04  time: 0.0164  data_time: 0.0014  memory: 341  
+2026/02/05 12:23:11 - mmengine - INFO - Epoch(val) [0][1250/1478]    eta: 0:00:04  time: 0.0168  data_time: 0.0015  memory: 341  
+2026/02/05 12:23:12 - mmengine - INFO - Epoch(val) [0][1300/1478]    eta: 0:00:03  time: 0.0170  data_time: 0.0016  memory: 341  
+2026/02/05 12:23:12 - mmengine - INFO - Epoch(val) [0][1350/1478]    eta: 0:00:02  time: 0.0169  data_time: 0.0015  memory: 328  
+2026/02/05 12:23:13 - mmengine - INFO - Epoch(val) [0][1400/1478]    eta: 0:00:01  time: 0.0169  data_time: 0.0015  memory: 335  
+2026/02/05 12:23:14 - mmengine - INFO - Epoch(val) [0][1450/1478]    eta: 0:00:00  time: 0.0168  data_time: 0.0015  memory: 338  
+2026/02/05 12:23:15 - mmengine - INFO - per class results:
+2026/02/05 12:23:15 - mmengine - INFO - 
++------------+-------+-------+
+|   Class    |  IoU  |  Acc  |
++------------+-------+-------+
+| background | 81.51 | 85.13 |
+|    pet     | 76.78 | 93.49 |
++------------+-------+-------+
+2026/02/05 12:23:15 - mmengine - INFO - Epoch(val) [0][1478/1478]    aAcc: 88.5200  mIoU: 79.1400  mAcc: 89.3100  data_time: 0.0017  time: 0.0177

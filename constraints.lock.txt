@@ -1,0 +1,8 @@
+numpy==1.26.4
+torch==2.1.2+cu121
+torchvision==0.16.2+cu121
+torchaudio==2.1.2+cu121
+mmcv==2.1.0
+mmsegmentation==1.2.2
+opencv-python-headless==4.8.1.78
+mmengine==0.10.7
