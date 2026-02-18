@@ -1,0 +1,15 @@
+name: ros2seg
+channels:
+  - robostack-humble
+  - conda-forge
+dependencies:
+  - python=3.11
+  - ros-humble-desktop
+  - ros-humble-cv-bridge
+  - pip
+  - pip:
+      # avoid openmim/mim/openxlab entirely
+      - mmengine==0.10.7
+      - mmsegmentation==1.2.2
+      - mmcv-lite==2.1.0
+
