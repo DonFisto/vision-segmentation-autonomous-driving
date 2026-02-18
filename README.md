@@ -14,17 +14,20 @@ Create env (example):
 
 Example inference:
 ```bash
-python scripts/infer_trained.py --config <cfg.py> --checkpoint <ckpt.pth> --img <img_or_dir> --out-dir out/infer```
+python scripts/infer_trained.py --config <cfg.py> --checkpoint <ckpt.pth> --img <img_or_dir> --out-dir out/infer
+```
 
 Example evaluation:
 ```bash
-python scripts/eval_mmseg.py --config <cfg.py> --checkpoint <ckpt.pth> --mode val```
+python scripts/eval_mmseg.py --config <cfg.py> --checkpoint <ckpt.pth> --mode val
+```
 
 
 ### `docs/project/repo_map.md`
 
 ```bash
-cat > docs/project/repo_map.md <<'EOF'```
+cat > docs/project/repo_map.md <<'EOF'
+```
 # Repo map
 
 ## configs/
