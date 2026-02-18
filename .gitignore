@@ -1,2 +1,36 @@
 datasets/
 out/
+
+# ---- Data / large artifacts ----
+datasets/
+data/
+bags/
+**/*.db3
+**/*.mcap
+
+# ---- Training outputs ----
+work_dirs/
+out/
+runs/
+wandb/
+mlruns/
+*.pth
+*.pt
+*.onnx
+*.engine
+
+# ---- Python ----
+__pycache__/
+*.pyc
+.venv/
+.env/
+.ipynb_checkpoints/
+
+# ---- ROS2 build artifacts (if you ever build inside repo) ----
+ros/**/build/
+ros/**/install/
+ros/**/log/
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
