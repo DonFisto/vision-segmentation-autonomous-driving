@@ -1,48 +1,147 @@
-# vision-segmentation-autonomous-driving
+# 🚗 Vision-Based Perception for Autonomous Driving  
+Semantic Segmentation + ROS2 + CARLA Integration
 
-Semantic segmentation toolkit (MMSegmentation) + CARLA/ROS2 integration.
+This project implements a modular perception pipeline for autonomous driving simulation.  
+It combines deep learning-based semantic segmentation (MMSegmentation) with real-time ROS2 integration and CARLA simulator streaming.
 
-## Repository layout
-- `configs/` MMSeg configs (pets, cityscapes)
-- `scripts/` training/inference/eval utilities
-- `ros/ros2_ws/` ROS2 workspace (nodes: CARLA bridge, control, segmentation, ASCII cam)
-- `docs/` setup + architecture + usage notes
+> Objective: Bridge ML experimentation and robotics deployment in a structured, reproducible architecture.
 
-## Quickstart (MMSeg)
-Create env (example):
-- `environment.yml` / `requirements*.txt` are provided; pick one workflow and stick to it.
+---
 
-Example inference:
-```bash
-python scripts/infer_trained.py --config <cfg.py> --checkpoint <ckpt.pth> --img <img_or_dir> --out-dir out/infer
-```
+## Project Overview
 
-Example evaluation:
-```bash
-python scripts/eval_mmseg.py --config <cfg.py> --checkpoint <ckpt.pth> --mode val
-```
+This repository is divided into two complementary layers:
 
+### 1. Machine Learning Layer
+- Train and evaluate semantic segmentation models
+- Manage MMSeg configs (Cityscapes, Oxford-IIIT Pets)
+- Run inference and generate overlay visualizations
 
-### `docs/project/repo_map.md`
+### 2. Robotics / Deployment Layer
+- ROS2 nodes for perception
+- CARLA RGB stream bridge
+- Real-time segmentation publishing
+- Modular topic-based architecture
 
-```bash
-cat > docs/project/repo_map.md <<'EOF'
-```
-# Repo map
+This separation mirrors real-world AV software stacks (research ↔ integration).
 
-## configs/
-- `pets/` Oxford-IIIT Pet binary segmentation
-- `cityscapes/` Cityscapes semantic segmentation
+---
 
-## scripts/
-- `convert_pets_to_mmseg.py` dataset conversion (Pets -> MMSeg format)
-- `train_from_cfg.py` training entrypoint (MMEngine Runner)
-- `eval_mmseg.py` eval entrypoint (val/test)
-- `infer_trained.py` inference + visualization (single image or directory)
+## System Architecture
 
-## ros/ros2_ws/
-ROS2 workspace that contains:
-- CARLA RGB publisher/bridge
-- Control node (terminal-driven)
-- Semantic segmentation node (publishes mask + overlay)
-- ASCII camera visualization node
+    CARLA Simulator
+          │
+          ▼
+    CARLA Bridge Node (ROS2)
+          │
+          ▼
+    Semantic Segmentation Node (MMSeg)
+          │
+          ├── Segmentation Mask Topic
+          └── Overlay Image Topic
+          │
+          ▼
+    Visualization / Control Nodes
+
+---
+
+## Example Output
+
+### Segmentation Overlay
+
+![Segmentation Example](assets/demo_overlay.png)
+
+---
+
+## Repository Structure
+
+    configs/              MMSeg model configurations
+    scripts/              Training, inference, evaluation utilities
+    ros/ros2_ws/          ROS2 workspace (CARLA + segmentation nodes)
+    docs/                 Setup guides and technical notes
+    assets/               Demo images and media
+
+---
+
+## Installation
+
+### Recommended (Conda)
+
+    conda env create -f environment.yml
+    conda activate ros2seg
+
+### Alternative (pip)
+
+    pip install -r requirements.lock.txt
+
+---
+
+## Quickstart — Standalone Inference
+
+    python scripts/infer_trained.py \
+      --config configs/cityscapes/segformer_b0_cityscapes.py \
+      --checkpoint <path_to_checkpoint.pth> \
+      --img assets/street.jpg \
+      --out-dir out/infer
+
+---
+
+## ROS2 + CARLA Integration
+
+Workspace location:
+
+    ros/ros2_ws/
+
+Import external dependencies:
+
+    vcs import src < deps.repos
+    colcon build
+
+See:
+
+    docs/ros/runbook.md
+
+for execution instructions.
+
+---
+
+## Adding a Demo GIF
+
+Place your recorded demo here:
+
+    assets/segmentation_demo.gif
+
+Embed it in this README using:
+
+    ## ROS2 + CARLA Demo
+    ![ROS Demo](assets/segmentation_demo.gif)
+
+To resize:
+
+    <img src="assets/segmentation_demo.gif" width="800">
+
+---
+
+## Technical Stack
+
+- Python
+- PyTorch
+- MMSegmentation / MMEngine
+- ROS2
+- CARLA
+- OpenCV
+
+---
+
+## Development Focus
+
+- Real-time segmentation streaming
+- ROS2 topic optimization
+- Model latency profiling
+- Perception integration for AV pipelines
+
+---
+
+## License
+
+This project is licensed under the MIT License — see the LICENSE file for details.
