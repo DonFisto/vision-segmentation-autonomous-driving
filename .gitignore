@@ -7,6 +7,7 @@ data/
 bags/
 **/*.db3
 **/*.mcap
+test_images/
 
 # ---- Training outputs ----
 work_dirs/
@@ -34,3 +35,4 @@ ros/**/log/
 # ---- OS ----
 .DS_Store
 Thumbs.db
+ros/ros2_ws/src/vision_msgs/
