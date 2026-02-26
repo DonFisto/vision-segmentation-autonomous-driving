@@ -22,3 +22,8 @@ git init
 
 wget -O test_images/street.jpg https://raw.githubusercontent.com/open-mmlab/mmsegmentation/main/demo/demo.png
 
+sudo apt-get install -y python3-vcstool
+cd ros/ros2_ws
+vcs import src < deps.repos
+rosdep install --from-paths src --ignore-src -r -y
+colcon build
