@@ -22,12 +22,12 @@ class CarlaRgbPublisher(Node):
         self.declare_parameter('height', 600)
         self.declare_parameter('fps', 15)
 
-        # Compressed image params
-        self.declare_parameter('publish_raw', True)          # set True if you also want /image_raw
-        self.declare_parameter('jpeg_quality', 60)            # 40–80 typical
+        # Image params
+        self.declare_parameter('publish_raw', True)
+        self.declare_parameter('jpeg_quality', 60)
 
         # Control params
-        self.declare_parameter('max_throttle', 0.6)  # clamp for safety
+        self.declare_parameter('max_throttle', 0.6)
         self.declare_parameter('max_brake', 1.0)
         self.declare_parameter('max_steer', 0.7)
 
@@ -47,18 +47,20 @@ class CarlaRgbPublisher(Node):
         # Publishers
         self.status_pub = self.create_publisher(String, 'carla_status', 10)
 
-        # Compressed camera topic (Foxglove-friendly)
+        BASE = '/carla/rgb/image_raw'
+
         self.img_comp_pub = self.create_publisher(
-            CompressedImage, '/carla/rgb/image_raw/compressed', 10
+            CompressedImage, f'{BASE}/compressed', 10
         )
 
-        # Optional raw topic (big bandwidth)
         self.img_pub = None
         if self.publish_raw:
-            self.img_pub = self.create_publisher(Image, '/carla/rgb/image_raw', 10)
+            self.img_pub = self.create_publisher(Image, BASE, 10)
 
-        # Subscriber for terminal control (publish Twist)
-        self.cmd_sub = self.create_subscription(Twist, '/carla/cmd_vel', self._on_cmd_vel, 10)
+        # Control subscriber
+        self.cmd_sub = self.create_subscription(
+            Twist, '/carla/cmd_vel', self._on_cmd_vel, 10
+        )
 
         # Connect to CARLA
         self.client = carla.Client(host, port)
@@ -77,9 +79,11 @@ class CarlaRgbPublisher(Node):
 
         vehicle_bps[0].set_attribute("role_name", "hero")
 
-        self.vehicle = self.world.try_spawn_actor(vehicle_bps[0], spawn_points[0])
+        self.vehicle = self.world.try_spawn_actor(
+            vehicle_bps[0], spawn_points[0]
+        )
         if self.vehicle is None:
-            raise RuntimeError("Failed to spawn vehicle (spawn point occupied). Try a different spawn point.")
+            raise RuntimeError("Failed to spawn vehicle.")
 
         # Attach RGB camera
         cam_bp = bp_lib.find('sensor.camera.rgb')
@@ -88,18 +92,18 @@ class CarlaRgbPublisher(Node):
         cam_bp.set_attribute('fov', '90')
         cam_bp.set_attribute('sensor_tick', str(1.0 / max(fps, 1)))
 
-        cam_transform = carla.Transform(carla.Location(x=1.5, z=2.4))
-        self.camera = self.world.spawn_actor(cam_bp, cam_transform, attach_to=self.vehicle)
+        cam_transform = carla.Transform(
+            carla.Location(x=1.5, z=2.4)
+        )
+        self.camera = self.world.spawn_actor(
+            cam_bp, cam_transform, attach_to=self.vehicle
+        )
         self.camera.listen(self._on_image)
 
-        # Status timer
         self.timer = self.create_timer(1.0, self._status_tick)
 
-        self.get_logger().info("Publishing /carla/rgb/image_raw/compressed (sensor_msgs/CompressedImage)")
-        if self.publish_raw:
-            self.get_logger().info("Also publishing /carla/rgb/image_raw (sensor_msgs/Image) [HIGH BANDWIDTH]")
-        self.get_logger().info("Listening for control on /carla/cmd_vel (geometry_msgs/Twist)")
-        self.get_logger().info("Controls: linear.x>0 forward, linear.x<0 reverse, angular.z left/right")
+        self.get_logger().info("Publishing /carla/rgb/image_raw")
+        self.get_logger().info("Publishing /carla/rgb/image_raw/compressed")
 
     def _status_tick(self):
         msg = String()
@@ -110,23 +114,32 @@ class CarlaRgbPublisher(Node):
         self.status_pub.publish(msg)
 
     def _on_image(self, image: carla.Image):
-        # CARLA provides BGRA uint8 buffer
-        arr = np.frombuffer(image.raw_data, dtype=np.uint8).reshape((image.height, image.width, 4))
-        bgr = arr[:, :, :3]  # BGR
+        arr = np.frombuffer(
+            image.raw_data, dtype=np.uint8
+        ).reshape((image.height, image.width, 4))
 
+        bgr = arr[:, :, :3]
         stamp = self.get_clock().now().to_msg()
 
-        # Publish compressed JPEG
-        ok, jpg = cv2.imencode('.jpg', bgr, [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality])
-        if ok:
-            msg = CompressedImage()
-            msg.header.stamp = stamp
-            msg.header.frame_id = "carla_camera"
-            msg.format = "jpeg"
-            msg.data = jpg.tobytes()
-            self.img_comp_pub.publish(msg)
+        # Compressed publish
+        ok, jpg = cv2.imencode(
+            '.jpg',
+            bgr,
+            [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality]
+        )
 
-        # Optional raw publish
+        if not ok:
+            self.get_logger().warn("JPEG encoding failed")
+            return
+
+        comp_msg = CompressedImage()
+        comp_msg.header.stamp = stamp
+        comp_msg.header.frame_id = "carla_camera"
+        comp_msg.format = "jpeg"
+        comp_msg.data = jpg.tobytes()
+        self.img_comp_pub.publish(comp_msg)
+
+        # Raw publish (optional)
         if self.img_pub is not None:
             ros_img = Image()
             ros_img.header.stamp = stamp
@@ -140,8 +153,8 @@ class CarlaRgbPublisher(Node):
             self.img_pub.publish(ros_img)
 
     def _on_cmd_vel(self, msg: Twist):
-        x = float(msg.linear.x)     # [-1, 1] expected
-        z = float(msg.angular.z)    # [-1, 1] expected
+        x = float(msg.linear.x)
+        z = float(msg.angular.z)
 
         steer = float(np.clip(z, -1.0, 1.0)) * self.max_steer
 
@@ -169,10 +182,10 @@ class CarlaRgbPublisher(Node):
 
     def destroy_node(self):
         try:
-            if hasattr(self, "camera") and self.camera is not None:
+            if self.camera is not None:
                 self.camera.stop()
                 self.camera.destroy()
-            if hasattr(self, "vehicle") and self.vehicle is not None:
+            if self.vehicle is not None:
                 self.vehicle.destroy()
         except Exception:
             pass
