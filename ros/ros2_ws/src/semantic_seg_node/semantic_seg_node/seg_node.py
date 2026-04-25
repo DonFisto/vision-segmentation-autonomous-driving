@@ -12,8 +12,8 @@ import numpy as np
 from mmseg.apis import init_model, inference_model
 
 
-CONFIG_PATH = "/home/danielmartinez/vision-segmentation-autonomous-driving/configs/cityscapes/segformer_b0_cityscapes.py"
-CHECKPOINT_PATH = "/home/danielmartinez/vision-segmentation-autonomous-driving/work_dirs/segformer_b0_cityscapes/iter_80000.pth"
+CONFIG_PATH = "/home/danielmartinez/vision-segmentation-autonomous-driving/configs/cityscapes/segformer_b0_vruheavy_refine_30k.py"
+CHECKPOINT_PATH = "/home/danielmartinez/vision-segmentation-autonomous-driving/work_dirs/segformer_b0_vruheavy_refine_30k/best_mIoU_iter_5000.pth"
 
 
 class SemanticSegNode(Node):
