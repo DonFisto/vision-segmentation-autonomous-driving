@@ -104,21 +104,9 @@ See:
 for execution instructions.
 
 ---
+## CARLA segmentation and object tracking
 
-## Adding a Demo GIF
-
-Place your recorded demo here:
-
-    assets/segmentation_demo.gif
-
-Embed it in this README using:
-
-    ## ROS2 + CARLA Demo
-    ![ROS Demo](assets/segmentation_demo.gif)
-
-To resize:
-
-    <img src="assets/segmentation_demo.gif" width="800">
+![Object detection and tracking example in CARLA](assets/Segmentatation+Overlay+Tracking.png)
 
 ---
 
