@@ -144,7 +144,9 @@ class FusionNode(Node):
             },
             "frame_id": msg.header.frame_id,
             "objects": fused,
-        })
+        },
+        indent=2,
+        )
 
         self.pub.publish(out)
 
