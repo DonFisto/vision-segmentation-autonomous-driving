@@ -50,6 +50,7 @@ class FreeSpaceNavigationNode(Node):
         # Decision thresholds.
         self.declare_parameter("center_obstacle_stop", 0.35)
         self.declare_parameter("center_free_cruise", 0.55)
+        self.declare_parameter("center_free_recovery", 0.20)
         self.declare_parameter("side_free_margin", 0.08)
 
         # Safety behavior.
@@ -72,6 +73,7 @@ class FreeSpaceNavigationNode(Node):
 
         self.center_obstacle_stop = float(self.get_parameter("center_obstacle_stop").value)
         self.center_free_cruise = float(self.get_parameter("center_free_cruise").value)
+        self.center_free_recovery = float(self.get_parameter("center_free_recovery").value)
         self.side_free_margin = float(self.get_parameter("side_free_margin").value)
 
         self.timeout_sec = float(self.get_parameter("timeout_sec").value)
@@ -204,12 +206,23 @@ class FreeSpaceNavigationNode(Node):
 
         center_obstacle = float(obstacle_ratio.get("center", 0.0))
 
-        # Safety override: if center obstacle ratio is too high, recover.
+        # Safety override 1: if center obstacle ratio is too high, recover.
         if center_obstacle >= self.center_obstacle_stop:
             direction = self.choose_better_side(free_ratio)
             self.enter_recovery(
                 direction,
                 reason=f"center obstacle ratio={center_obstacle:.2f}",
+            )
+            return
+
+        # Safety override 2: if center free space is too low, recover.
+        # This catches boxed-in situations where the center is mostly unknown
+        # or only slightly free, even if explicit obstacle ratio is moderate.
+        if center_free <= self.center_free_recovery:
+            direction = self.choose_better_side(free_ratio)
+            self.enter_recovery(
+                direction,
+                reason=f"center free too low={center_free:.2f}",
             )
             return
 
