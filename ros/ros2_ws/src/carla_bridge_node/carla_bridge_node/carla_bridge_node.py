@@ -5,10 +5,12 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image, CompressedImage
 from std_msgs.msg import String
 from geometry_msgs.msg import Twist
+from nav_msgs.msg import Odometry
 
 import numpy as np
 import cv2
 import carla
+import math
 
 
 class CarlaRgbPublisher(Node):
@@ -46,6 +48,12 @@ class CarlaRgbPublisher(Node):
 
         # Publishers
         self.status_pub = self.create_publisher(String, 'carla_status', 10)
+
+        self.hero_odom_pub = self.create_publisher(
+            Odometry,
+            '/carla/hero_odom',
+            10,
+        )
 
         # Compressed camera topic (Foxglove-friendly)
         self.img_comp_pub = self.create_publisher(
@@ -101,7 +109,65 @@ class CarlaRgbPublisher(Node):
         self.get_logger().info("Listening for control on /carla/cmd_vel (geometry_msgs/Twist)")
         self.get_logger().info("Controls: linear.x>0 forward, linear.x<0 reverse, angular.z left/right")
 
+    def _carla_rotation_to_quaternion(self, rotation):
+        roll = math.radians(rotation.roll)
+        pitch = math.radians(rotation.pitch)
+        yaw = math.radians(rotation.yaw)
+
+        cy = math.cos(yaw * 0.5)
+        sy = math.sin(yaw * 0.5)
+        cp = math.cos(pitch * 0.5)
+        sp = math.sin(pitch * 0.5)
+        cr = math.cos(roll * 0.5)
+        sr = math.sin(roll * 0.5)
+
+        return {
+            "w": cr * cp * cy + sr * sp * sy,
+            "x": sr * cp * cy - cr * sp * sy,
+            "y": cr * sp * cy + sr * cp * sy,
+            "z": cr * cp * sy - sr * sp * cy,
+        }
+
+    def publish_hero_odom(self):
+        """Publish CARLA hero pose and velocity as nav_msgs/Odometry."""
+        if self.vehicle is None:
+            return
+
+        try:
+            transform = self.vehicle.get_transform()
+            velocity = self.vehicle.get_velocity()
+            angular_velocity = self.vehicle.get_angular_velocity()
+        except Exception as e:
+            self.get_logger().warn(f"Could not read hero odometry from CARLA: {e}")
+            return
+
+        odom = Odometry()
+        odom.header.stamp = self.get_clock().now().to_msg()
+        odom.header.frame_id = "carla_world"
+        odom.child_frame_id = "hero"
+
+        odom.pose.pose.position.x = float(transform.location.x)
+        odom.pose.pose.position.y = float(transform.location.y)
+        odom.pose.pose.position.z = float(transform.location.z)
+
+        q = self._carla_rotation_to_quaternion(transform.rotation)
+        odom.pose.pose.orientation.x = float(q["x"])
+        odom.pose.pose.orientation.y = float(q["y"])
+        odom.pose.pose.orientation.z = float(q["z"])
+        odom.pose.pose.orientation.w = float(q["w"])
+
+        odom.twist.twist.linear.x = float(velocity.x)
+        odom.twist.twist.linear.y = float(velocity.y)
+        odom.twist.twist.linear.z = float(velocity.z)
+
+        odom.twist.twist.angular.x = math.radians(float(angular_velocity.x))
+        odom.twist.twist.angular.y = math.radians(float(angular_velocity.y))
+        odom.twist.twist.angular.z = math.radians(float(angular_velocity.z))
+
+        self.hero_odom_pub.publish(odom)
+
     def _status_tick(self):
+        self.publish_hero_odom()
         msg = String()
         msg.data = (
             f"Connected: {self.world.get_map().name} | "
