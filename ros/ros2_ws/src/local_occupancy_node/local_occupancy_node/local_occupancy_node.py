@@ -66,6 +66,10 @@ class LocalOccupancyNode(Node):
         self.declare_parameter("roi_y_min_ratio", 0.20)
         self.declare_parameter("roi_y_max_ratio", 0.95)
 
+        # Static classes such as buildings, walls and vegetation are vertical.
+        # Only their lower image region should be projected into the ground map.
+        self.declare_parameter("static_y_min_ratio", 0.45)
+
         self.declare_parameter("hfov_deg", 90.0)
         self.declare_parameter("min_forward_m", 1.0)
         self.declare_parameter("far_power", 1.3)
@@ -100,6 +104,7 @@ class LocalOccupancyNode(Node):
         self.roi_x_max_ratio = float(self.get_parameter("roi_x_max_ratio").value)
         self.roi_y_min_ratio = float(self.get_parameter("roi_y_min_ratio").value)
         self.roi_y_max_ratio = float(self.get_parameter("roi_y_max_ratio").value)
+        self.static_y_min_ratio = float(self.get_parameter("static_y_min_ratio").value)
 
         self.hfov_deg = float(self.get_parameter("hfov_deg").value)
         self.min_forward_m = float(self.get_parameter("min_forward_m").value)
@@ -261,18 +266,18 @@ class LocalOccupancyNode(Node):
                 is_static = cls in static_ids
                 is_dynamic = cls in dynamic_ids
 
-                if self.use_depth_obstacles and depth is not None:
-                    d = float(depth[v, u])
-                    if math.isfinite(d):
-                        if self.depth_closer_is_larger:
-                            close = d >= self.close_depth_thresh
-                        else:
-                            close = d <= self.close_depth_thresh
+                # Static semantic classes are often vertical surfaces.
+                # Avoid projecting upper-image building/tree/wall pixels as if
+                # they were ground-plane obstacles in front of the hero vehicle.
+                if is_static and v < int(h * self.static_y_min_ratio):
+                    is_static = False
 
-                        # Close unknown non-road regions are conservatively treated as static.
-                        # Close dynamic semantic classes remain dynamic.
-                        if close and not is_free and not is_dynamic:
-                            is_static = True
+                # Depth is currently used only as auxiliary information.
+                # Important: do not promote unknown/noisy non-road pixels to static obstacles
+                # using depth alone, because this creates false red regions in the far front
+                # of the local occupancy map.
+                #
+                # For now, semantic class decides free/static/dynamic.
 
                 if not is_free and not is_static and not is_dynamic:
                     continue
