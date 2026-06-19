@@ -1,137 +1,232 @@
-# ROS2 + CARLA runbook
+# ROS2 and CARLA Runbook
 
-This document describes the minimal sequence to bring up the CARLA + ROS2 + Segmentation system.
+This runbook starts and verifies the public CARLA-to-ROS2 pipeline through accumulated local mapping.
 
----
+## Pipeline
 
-# SYSTEM OVERVIEW
+```text
+CARLA bridge
+  |-- RGB image --> semantic segmentation --> object extraction --> tracking --+
+  |                                                                            +--> fusion
+  |-- RGB image --> monocular depth -------------------------------------------+
+  |                    |
+  |                    +--> free-space estimation
+  |                    +--> local occupancy
+  |
+  |-- hero odometry ---------------------------> accumulated local mapping
+                                                  ^
+local occupancy grids ----------------------------+
+```
 
-CARLA (server, offscreen)
-        ↓
-CARLA Bridge Node → publishes /carla/rgb/image_raw
-        ↓
-Semantic Segmentation Node
-        ↓
-Publishes:
-  • /perception/semantic_mask
-  • /perception/semantic_overlay
-        ↓
-Visualization (Foxglove / RViz) or rosbag recording
+## Prerequisites
 
-Optional:
-Control Node → publishes /carla/cmd_vel (geometry_msgs/Twist)
+- Complete [the setup guide](../setup.md).
+- Make the segmentation config and checkpoint available at the locations configured by the segmentation node.
+- Start a compatible CARLA instance using its standard launcher. For a headless installation, a typical public command is:
 
----
+```bash
+<CARLA_INSTALL>/CarlaUE4.sh -RenderOffScreen
+```
 
-# TERMINAL SETUP (SERVER)
+The bridge creates the hero vehicle and attached RGB camera. Start it against a clean simulation world so its initial spawn point is available.
 
-You typically need 3–4 terminals.
+## Prepare Each Shell
 
-------------------------------------
-Terminal 1 — Start CARLA (offscreen)
-------------------------------------
+Run the following in every shell used for a ROS2 node:
 
-cd ~/CARLA_0.9.16
-./CarlaUE4.sh -RenderOffScreen
-
-Wait until the server is fully started.
-
-------------------------------------
-Terminal 2 — Source ROS
-------------------------------------
-
-source /opt/ros/humble/setup.bash
-
-------------------------------------
-Terminal 3 — Source Workspace
-------------------------------------
-
-cd ~/vision-segmentation-autonomous-driving/ros/ros2_ws
-
-# If using merged install:
+```bash
+conda activate ros2seg
+cd ros/ros2_ws
 source install/setup.bash
+```
 
-# If using isolated install:
-# source install/local_setup.bash
+Commands below are ordered by dependency. Run each long-lived node in its own prepared shell.
 
-------------------------------------
-Terminal 4 — Run Nodes
-------------------------------------
+## Start the Pipeline
 
-# CARLA RGB bridge
-ros2 run carla_bridge_node carla_bridge
+### 1. CARLA Bridge and Hero Odometry
 
-# Semantic segmentation
+```bash
+ros2 run carla_bridge_node carla_bridge_node
+```
+
+Publishes RGB images and `/carla/hero_odom`. The odometry is simulator-provided ground truth used by accumulated mapping.
+
+### 2. Semantic Segmentation
+
+```bash
 ros2 run semantic_seg_node seg_node
+```
 
-# Control node (optional)
-ros2 run carla_control_node carla_control
+### 3. Object Extraction
 
----
+```bash
+ros2 run object_detection_node detector
+```
 
-# VERIFY TOPICS
+This node extracts Cityscapes object classes from the semantic mask; it is not a separate learned object detector.
 
+### 4. Tracking
+
+```bash
+ros2 run tracking_node tracking_node
+```
+
+### 5. Monocular Depth
+
+```bash
+ros2 run depth_node depth_node
+```
+
+Depth Anything V2 produces relative depth, not calibrated metric distance.
+
+### 6. Object-Depth Fusion
+
+```bash
+ros2 run fusion_node fusion_node
+```
+
+### 7. Free-Space Estimation
+
+```bash
+ros2 run free_space_node free_space_node
+```
+
+### 8. Local Occupancy
+
+```bash
+ros2 run local_occupancy_node local_occupancy_node
+```
+
+### 9. Accumulated Local Mapping
+
+```bash
+ros2 run local_mapping_node local_mapping_node
+```
+
+The mapping node combines hero odometry with the combined, static, and dynamic local occupancy grids.
+
+## Topic Reference
+
+| Stage | Main output | Type |
+| --- | --- | --- |
+| Bridge | `/carla/rgb/image_raw` | `sensor_msgs/msg/Image` |
+| Bridge | `/carla/rgb/image_raw/compressed` | `sensor_msgs/msg/CompressedImage` |
+| Bridge | `/carla/hero_odom` | `nav_msgs/msg/Odometry` |
+| Segmentation | `/perception/semantic_mask` | `sensor_msgs/msg/Image` |
+| Segmentation | `/perception/semantic_overlay/compressed` | `sensor_msgs/msg/CompressedImage` |
+| Object extraction | `/perception/detections` | `vision_msgs/msg/Detection2DArray` |
+| Tracking | `/perception/tracks` | `vision_msgs/msg/Detection2DArray` |
+| Depth | `/perception/depth/image` | `sensor_msgs/msg/Image` |
+| Depth | `/perception/depth/colormap/compressed` | `sensor_msgs/msg/CompressedImage` |
+| Fusion | `/perception/fused_objects` | `std_msgs/msg/String` |
+| Free space | `/perception/free_space_status` | `std_msgs/msg/String` |
+| Local occupancy | `/perception/local_occupancy_grid` | `nav_msgs/msg/OccupancyGrid` |
+| Local occupancy | `/perception/local_static_obstacle_grid` | `nav_msgs/msg/OccupancyGrid` |
+| Local occupancy | `/perception/local_dynamic_obstacle_grid` | `nav_msgs/msg/OccupancyGrid` |
+| Local occupancy | `/perception/local_occupancy_status` | `std_msgs/msg/String` |
+| Local mapping | `/perception/accumulated_local_map` | `nav_msgs/msg/OccupancyGrid` |
+| Local mapping | `/perception/accumulated_static_map` | `nav_msgs/msg/OccupancyGrid` |
+| Local mapping | `/perception/accumulated_dynamic_map` | `nav_msgs/msg/OccupancyGrid` |
+| Local mapping | `/perception/local_mapping_status` | `std_msgs/msg/String` |
+
+Compressed free-space, occupancy, and mapping debug images are also published for visualization.
+
+## Verify the Pipeline
+
+List active nodes and topics:
+
+```bash
+ros2 node list
 ros2 topic list
+```
 
-Expected topics:
-  /carla/rgb/image_raw
-  /perception/semantic_mask
-  /perception/semantic_overlay
-  /carla/cmd_vel
-  /carla_status
+Check each major boundary in order:
 
----
+```bash
+ros2 topic hz /carla/rgb/image_raw
+ros2 topic echo /carla/hero_odom --once
+ros2 topic hz /perception/semantic_mask
+ros2 topic echo /perception/detections --once
+ros2 topic echo /perception/tracks --once
+ros2 topic hz /perception/depth/image
+ros2 topic echo /perception/fused_objects --once
+ros2 topic echo /perception/free_space_status --once
+ros2 topic echo /perception/local_occupancy_status --once
+ros2 topic echo /perception/local_mapping_status --once
+```
 
-# RECORD ROS BAG (OPTIONAL)
+Inspect publisher/subscriber connections when a topic exists but data does not flow:
 
-Record RGB + segmentation:
+```bash
+ros2 topic info /perception/semantic_mask --verbose
+ros2 topic info /perception/depth/image --verbose
+ros2 topic info /perception/local_occupancy_grid --verbose
+ros2 topic info /perception/accumulated_local_map --verbose
+```
 
+## Record a Representative Run
+
+```bash
 ros2 bag record \
-  /carla/rgb/image_raw \
-  /perception/semantic_overlay \
-  /perception/semantic_mask
+  /carla/rgb/image_raw/compressed \
+  /carla/hero_odom \
+  /perception/semantic_overlay/compressed \
+  /perception/tracks \
+  /perception/depth/colormap/compressed \
+  /perception/fused_objects \
+  /perception/free_space_status \
+  /perception/local_occupancy_grid \
+  /perception/accumulated_local_map \
+  /perception/local_mapping_status
+```
 
-Stop with Ctrl+C.
+Stop recording with `Ctrl+C`. Replay with `ros2 bag play <bag_directory>`.
 
----
+## Troubleshooting
 
-# PLAY ROS BAG (OPTIONAL)
+### Package or executable not found
 
-ros2 bag play <bag_directory>
+- Activate the expected environment.
+- Source `ros/ros2_ws/install/setup.bash` in the current shell.
+- Rebuild with `colcon build --symlink-install` after dependency or package changes.
 
----
+### Bridge does not start
 
-# CONTROL INTERFACE
+- Confirm CARLA is running and its Python API release matches the simulator.
+- Use a clean world with an available vehicle spawn point.
+- Check the bridge log before starting downstream nodes.
 
-The control node listens on:
+### Segmentation does not start
 
-/carla/cmd_vel  (geometry_msgs/Twist)
+- Confirm the configured model file and checkpoint both exist and are compatible.
+- Verify `torch.cuda.is_available()` returns `True`.
+- Check that the pinned MMCV, MMEngine, MMSegmentation, and PyTorch versions are installed.
 
-Mapping:
-  linear.x > 0   → forward
-  linear.x < 0   → reverse
-  linear.x = 0   → brake
-  angular.z      → steering
+### Depth does not start
 
-Example manual publish:
+- Verify `transformers`, `tokenizers`, and `huggingface-hub` are installed.
+- Allow the first run to retrieve the default model, or populate the model cache beforehand.
+- Check available GPU memory if initialization or inference fails.
 
-ros2 topic pub /carla/cmd_vel geometry_msgs/Twist \
-"{linear: {x: 0.5}, angular: {z: 0.0}}"
+### Detections, tracks, or fusion are empty
 
----
+- Confirm the semantic mask and depth topics are publishing.
+- Inspect `/perception/detections` before debugging tracking.
+- Remember that fusion requires both tracks and depth.
 
-# TROUBLESHOOTING
+### Free-space or occupancy outputs are absent
 
-If segmentation node fails:
-  • Ensure model checkpoint path is correct
-  • Ensure CUDA is available (if using GPU)
-  • Confirm /carla/rgb/image_raw is publishing
+- Confirm both `/perception/semantic_mask` and `/perception/depth/image` are active.
+- Echo the corresponding status topic before inspecting large image or grid messages.
+- Check topic connection details for name or type mismatches.
 
-If control node fails:
-  • Ensure bridge node is running
-  • Ensure vehicle was spawned with role_name='hero'
+### Accumulated maps are absent
 
-If workspace sourcing fails:
-  • Check install layout (merged vs isolated)
-  • Rebuild with:
-      colcon build --symlink-install
+- Confirm `/carla/hero_odom` is publishing.
+- Confirm all three local occupancy grid topics are active.
+- Start `local_mapping_node` only after the bridge and local occupancy node are producing data.
+
+### Control safety
+
+Only one controller should publish vehicle commands at a time. Stop autonomous command publishers before manual testing, and stop the vehicle before shutting down the perception stack.
