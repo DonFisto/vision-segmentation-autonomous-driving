@@ -146,7 +146,7 @@ class FreeSpaceNode(Node):
 
         obstacle_ids = {
             1,   # sidewalk
-            2,   # building
+            #2,   # building
             3,   # wall
             4,   # fence
             5,   # pole
