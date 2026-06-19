@@ -125,31 +125,45 @@ Breakthrough: Clean portfolio-ready architecture.
 
 ---
 
+## Phase 7 — Depth-Aware Navigation and Local Mapping
+
+### Session 15 — Accumulated Local Mapping
+- Extended the perception stack through depth fusion, free-space estimation, and reactive navigation.
+- Added vehicle-relative local occupancy grids with static and dynamic obstacle layers.
+- Used CARLA hero odometry to accumulate recent occupancy observations in world coordinates.
+- Published combined, static, and dynamic accumulated maps with debug and status outputs.
+
+Breakthrough: The system progressed from frame-by-frame perception to a short-term map-like representation of the surrounding environment.
+
+---
+
 # Current System State
 
 You now have:
 
 - Trained SegFormer on Cityscapes
-- Real-time segmentation node
-- CARLA offscreen simulation
-- Terminal control via Twist
-- Foxglove live streaming
-- Bag recording fallback
-- Structured repository
-- Version-controlled pipeline
+- Real-time segmentation, object extraction and tracking
+- Monocular depth estimation and object-depth fusion
+- Semantic-depth free-space estimation
+- Reactive and free-space navigation prototypes
+- Local occupancy grids with static and dynamic layers
+- Accumulated local mapping using CARLA odometry
+- ROS2 visualization and recording outputs
+- Structured, version-controlled pipeline
 
 ---
 
 # Next Major Direction
 
-1) Object Detection + Tracking
-- YOLO or lightweight detector
-- Tracking-by-detection (Kalman + IoU)
+1) Improve Local Mapping
+- Rolling map support
+- Timestamp-aware odometry integration
+- Better image-to-ground projection
 
-2) Monocular Visual Odometry
-- ORB-SLAM2 or lightweight VO
-- Ego-motion estimation
+2) Add Visual Odometry
+- Replace simulator-provided ego motion with estimated motion
+- Evaluate drift and temporal alignment
 
-3) Global Map Integration
-- Keyframe-based sparse map
-- Combine with segmentation layers
+3) Connect Mapping to Navigation
+- Plan with accumulated occupancy instead of single-frame cues
+- Improve static and dynamic obstacle handling
