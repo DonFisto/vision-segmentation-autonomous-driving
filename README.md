@@ -68,6 +68,12 @@ local_mapping_node         carla_control_node
 
 ![Object extraction and tracking in CARLA](assets/Segmentatation+Overlay+Tracking.png)
 
+### Local Occupancy and Mapping
+
+<p align="center">
+  <img src="assets/AD_Mapping_Demo.gif" alt="CARLA navigation and mapping stack demo" width="800"/>
+</p>
+
 ## Repository Layout
 
 ```text
