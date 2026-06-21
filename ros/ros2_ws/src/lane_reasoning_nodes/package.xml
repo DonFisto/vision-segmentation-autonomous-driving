@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>lane_reasoning_nodes</name>
+  <version>0.1.0</version>
+  <description>Lane projection, mapping, and guidance skeleton nodes for the ROS2/CARLA autonomy stack.</description>
+
+  <maintainer email="maintainer@example.com">Daniel Martinez</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
