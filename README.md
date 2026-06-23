@@ -85,6 +85,10 @@ docs/          Setup, operation, timeline, and milestone documentation
 assets/        Portfolio images and demonstrations
 ```
 
+## Experiments and tuning
+
+- [Parameter tuning log](experiments/parameter_tuning_log.md): runtime parameter iterations for navigation, occupancy, mapping, and lane detection.
+
 ## Getting Started
 
 The project provides a pinned Conda environment and pip dependency set:
