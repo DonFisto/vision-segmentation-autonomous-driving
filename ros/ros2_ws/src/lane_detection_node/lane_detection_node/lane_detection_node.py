@@ -58,6 +58,24 @@ class LaneDetectionNode(Node):
         self.declare_parameter("yellow_s_min", 80)
         self.declare_parameter("yellow_s_max", 255)
 
+        # LDv3.2 shadow-aware local contrast white detection.
+        # This helps detect white lane markings in shadows, where absolute
+        # lightness thresholds fail.
+        self.declare_parameter("use_adaptive_white", True)
+        self.declare_parameter("use_clahe", True)
+        self.declare_parameter("clahe_clip_limit", 2.0)
+        self.declare_parameter("clahe_tile_grid_size", 8)
+        self.declare_parameter("adaptive_white_block_size", 41)
+        self.declare_parameter("adaptive_white_c", -6)
+        self.declare_parameter("adaptive_white_min_l", 60)
+        self.declare_parameter("adaptive_white_s_max", 145)
+
+        # Gate adaptive white so it only helps in shadows/dark regions.
+        # In bright regions, adaptive thresholding tends to over-detect
+        # asphalt texture, cracks, and sunlit speckles.
+        self.declare_parameter("adaptive_white_shadow_l_max", 155)
+        self.declare_parameter("adaptive_white_use_shadow_gate", True)
+
         # Optional edge filtering
         self.declare_parameter("use_canny_edges", False)
         self.declare_parameter("canny_low", 60)
@@ -105,6 +123,16 @@ class LaneDetectionNode(Node):
         self.declare_parameter("max_offset_jump_px", 120.0)
         self.declare_parameter("max_heading_jump_deg", 25.0)
 
+        # LDv3 consistency and confidence gates
+        self.declare_parameter("enforce_perspective_consistency", True)
+        self.declare_parameter("perspective_slope_tolerance", 0.18)
+        self.declare_parameter("min_lane_width_px", 180.0)
+        self.declare_parameter("max_lane_width_px", 650.0)
+        self.declare_parameter("single_side_confidence_cap", 0.58)
+        self.declare_parameter("invalid_width_confidence_cap", 0.35)
+        self.declare_parameter("min_stable_frames", 3)
+        self.declare_parameter("temporal_confidence_cap", 0.65)
+
         # Runtime
         self.declare_parameter("process_every_n", 1)
         self.declare_parameter("publish_debug_overlay", True)
@@ -120,6 +148,7 @@ class LaneDetectionNode(Node):
 
         self.prev_center_offset_px: Optional[float] = None
         self.prev_heading_error_deg: Optional[float] = None
+        self.stable_lane_frames = 0
 
         self.create_subscription(CompressedImage, self.rgb_topic, self.rgb_callback, 10)
         self.create_subscription(Image, self.semantic_topic, self.semantic_callback, 10)
@@ -249,6 +278,59 @@ class LaneDetectionNode(Node):
 
         return road_mask
 
+    def detect_adaptive_white(self, bgr: np.ndarray, hls: np.ndarray) -> np.ndarray:
+        if not bool(self.get_parameter("use_adaptive_white").value):
+            h, w = bgr.shape[:2]
+            return np.zeros((h, w), dtype=np.uint8)
+
+        l_channel = hls[:, :, 1]
+        s_channel = hls[:, :, 2]
+
+        work = l_channel.copy()
+
+        if bool(self.get_parameter("use_clahe").value):
+            clip_limit = float(self.get_parameter("clahe_clip_limit").value)
+            tile_size = int(self.get_parameter("clahe_tile_grid_size").value)
+            tile_size = max(2, tile_size)
+
+            clahe = cv2.createCLAHE(
+                clipLimit=clip_limit,
+                tileGridSize=(tile_size, tile_size),
+            )
+            work = clahe.apply(work)
+
+        block_size = int(self.get_parameter("adaptive_white_block_size").value)
+        block_size = max(3, block_size)
+        if block_size % 2 == 0:
+            block_size += 1
+
+        adaptive_c = int(self.get_parameter("adaptive_white_c").value)
+
+        adaptive = cv2.adaptiveThreshold(
+            work,
+            255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY,
+            block_size,
+            adaptive_c,
+        )
+
+        min_l = int(self.get_parameter("adaptive_white_min_l").value)
+        s_max = int(self.get_parameter("adaptive_white_s_max").value)
+
+        min_l_mask = cv2.inRange(l_channel, min_l, 255)
+        low_saturation_mask = cv2.inRange(s_channel, 0, s_max)
+
+        adaptive_white = cv2.bitwise_and(adaptive, min_l_mask)
+        adaptive_white = cv2.bitwise_and(adaptive_white, low_saturation_mask)
+
+        if bool(self.get_parameter("adaptive_white_use_shadow_gate").value):
+            shadow_l_max = int(self.get_parameter("adaptive_white_shadow_l_max").value)
+            shadow_mask = cv2.inRange(l_channel, 0, shadow_l_max)
+            adaptive_white = cv2.bitwise_and(adaptive_white, shadow_mask)
+
+        return adaptive_white
+
     def detect_lane_candidates(
         self,
         bgr: np.ndarray,
@@ -280,7 +362,11 @@ class LaneDetectionNode(Node):
             ], dtype=np.uint8),
         )
 
+        adaptive_white_mask = self.detect_adaptive_white(bgr, hls)
+
         lane_mask = cv2.bitwise_or(white_mask, yellow_mask)
+        lane_mask = cv2.bitwise_or(lane_mask, adaptive_white_mask)
+
         lane_mask = cv2.bitwise_and(lane_mask, roi_mask)
         lane_mask = cv2.bitwise_and(lane_mask, road_mask)
 
@@ -480,9 +566,33 @@ class LaneDetectionNode(Node):
                 "score": score,
             }
 
+            side = None
             if x_bottom < mid_x - split_margin:
-                left_candidates.append(candidate)
+                side = "left"
             elif x_bottom > mid_x + split_margin:
+                side = "right"
+            else:
+                continue
+
+            if bool(self.get_parameter("enforce_perspective_consistency").value):
+                slope_tolerance = float(self.get_parameter("perspective_slope_tolerance").value)
+
+                # Image coordinates: y grows downward.
+                # A left lane boundary normally has a <= 0 because it converges
+                # toward the image center when moving upward.
+                # A right lane boundary normally has a >= 0.
+                #
+                # The tolerance keeps near-vertical straight lanes valid.
+                if side == "left" and a > slope_tolerance:
+                    continue
+                if side == "right" and a < -slope_tolerance:
+                    continue
+
+            candidate["side"] = side
+
+            if side == "left":
+                left_candidates.append(candidate)
+            else:
                 right_candidates.append(candidate)
 
         left_candidates = sorted(left_candidates, key=lambda c: c["score"], reverse=True)[:max_segments]
@@ -572,11 +682,27 @@ class LaneDetectionNode(Node):
         center_top = None
         inferred_side = None
 
+        lane_width_bottom_px = None
+        lane_width_top_px = None
+        lane_width_valid = None
+
         if left_visible and right_visible:
             left_bottom = self.x_at_y(left_fit, y_bottom, image_width)
             right_bottom = self.x_at_y(right_fit, y_bottom, image_width)
             left_top = self.x_at_y(left_fit, y_top, image_width)
             right_top = self.x_at_y(right_fit, y_top, image_width)
+
+            lane_width_bottom_px = float(right_bottom - left_bottom)
+            lane_width_top_px = float(right_top - left_top)
+
+            min_lane_width = float(self.get_parameter("min_lane_width_px").value)
+            max_lane_width = float(self.get_parameter("max_lane_width_px").value)
+
+            lane_width_valid = (
+                min_lane_width <= lane_width_bottom_px <= max_lane_width
+                and lane_width_top_px > 0.0
+                and lane_width_top_px <= lane_width_bottom_px * 1.25
+            )
 
             center_bottom = 0.5 * (left_bottom + right_bottom)
             center_top = 0.5 * (left_top + right_top)
@@ -600,6 +726,7 @@ class LaneDetectionNode(Node):
         total_lane_pixels = int(np.count_nonzero(lane_mask))
 
         if center_bottom is None or center_top is None:
+            self.stable_lane_frames = 0
             return {
                 "lane_detected": False,
                 "left_lane_visible": False,
@@ -609,6 +736,10 @@ class LaneDetectionNode(Node):
                 "heading_error_deg": None,
                 "confidence": 0.0,
                 "lane_pixels": total_lane_pixels,
+                "stable_lane_frames": self.stable_lane_frames,
+                "lane_width_bottom_px": lane_width_bottom_px,
+                "lane_width_top_px": lane_width_top_px,
+                "lane_width_valid": lane_width_valid,
                 "fit_debug": fit_debug,
             }
 
@@ -619,11 +750,11 @@ class LaneDetectionNode(Node):
         dy = float(y_bottom - y_top)
         heading_error_deg = float(math.degrees(math.atan2(dx, dy)))
 
-        # Reject extreme headings as unreliable.
         max_output_heading = float(self.get_parameter("max_output_heading_deg").value)
         if abs(heading_error_deg) > max_output_heading:
             confidence = 0.0
             lane_detected = False
+            fit_debug["confidence_caps"] = ["max_output_heading_exceeded"]
         else:
             confidence = self.compute_confidence(
                 image_width=image_width,
@@ -633,6 +764,7 @@ class LaneDetectionNode(Node):
                 heading_error_deg=heading_error_deg,
                 fit_debug=fit_debug,
                 total_lane_pixels=total_lane_pixels,
+                lane_width_valid=lane_width_valid,
             )
             lane_detected = confidence > 0.10
 
@@ -645,6 +777,8 @@ class LaneDetectionNode(Node):
         if confidence > 0.10:
             self.prev_center_offset_px = center_offset_px
             self.prev_heading_error_deg = heading_error_deg
+        else:
+            lane_detected = False
 
         return {
             "lane_detected": lane_detected,
@@ -655,6 +789,10 @@ class LaneDetectionNode(Node):
             "heading_error_deg": round(heading_error_deg, 2),
             "confidence": round(float(confidence), 3),
             "lane_pixels": total_lane_pixels,
+            "stable_lane_frames": self.stable_lane_frames,
+            "lane_width_bottom_px": None if lane_width_bottom_px is None else round(lane_width_bottom_px, 2),
+            "lane_width_top_px": None if lane_width_top_px is None else round(lane_width_top_px, 2),
+            "lane_width_valid": lane_width_valid,
             "fit_debug": fit_debug,
         }
 
@@ -667,7 +805,10 @@ class LaneDetectionNode(Node):
         heading_error_deg: float,
         fit_debug: dict,
         total_lane_pixels: int,
+        lane_width_valid,
     ) -> float:
+        confidence_caps = []
+
         if fit_debug.get("fit_method") == "hough":
             total_length = float(fit_debug.get("total_segment_length", 0.0))
             accepted_segments = int(fit_debug.get("accepted_segments", 0))
@@ -682,6 +823,7 @@ class LaneDetectionNode(Node):
             visibility_score = 1.0
         else:
             visibility_score = 0.55
+            confidence_caps.append("single_side_detection")
 
         max_conf_heading = float(self.get_parameter("max_confident_heading_deg").value)
         max_output_heading = float(self.get_parameter("max_output_heading_deg").value)
@@ -704,6 +846,24 @@ class LaneDetectionNode(Node):
             offset_score = max(0.25, 1.0 - (abs_offset - max_conf_offset) / max(1.0, image_width * 0.25))
 
         confidence = visibility_score * evidence_score * heading_score * offset_score
+
+        if not (left_visible and right_visible):
+            cap = float(self.get_parameter("single_side_confidence_cap").value)
+            confidence = min(confidence, cap)
+
+        if lane_width_valid is False:
+            cap = float(self.get_parameter("invalid_width_confidence_cap").value)
+            confidence = min(confidence, cap)
+            confidence_caps.append("invalid_lane_width")
+
+        fit_debug["confidence_components"] = {
+            "evidence_score": round(float(evidence_score), 3),
+            "visibility_score": round(float(visibility_score), 3),
+            "heading_score": round(float(heading_score), 3),
+            "offset_score": round(float(offset_score), 3),
+        }
+        fit_debug["confidence_caps"] = confidence_caps
+
         return float(np.clip(confidence, 0.0, 1.0))
 
     def apply_temporal_smoothing(
@@ -713,6 +873,15 @@ class LaneDetectionNode(Node):
         confidence: float,
     ):
         if self.prev_center_offset_px is None or self.prev_heading_error_deg is None:
+            self.stable_lane_frames = 1 if confidence > 0.10 else 0
+
+            min_stable_frames = int(self.get_parameter("min_stable_frames").value)
+            if self.stable_lane_frames < min_stable_frames:
+                confidence = min(
+                    confidence,
+                    float(self.get_parameter("temporal_confidence_cap").value),
+                )
+
             return center_offset_px, heading_error_deg, confidence
 
         offset_jump = abs(center_offset_px - self.prev_center_offset_px)
@@ -722,7 +891,17 @@ class LaneDetectionNode(Node):
         max_heading_jump = float(self.get_parameter("max_heading_jump_deg").value)
 
         if offset_jump > max_offset_jump or heading_jump > max_heading_jump:
+            self.stable_lane_frames = 1
             confidence *= 0.45
+        else:
+            self.stable_lane_frames += 1
+
+        min_stable_frames = int(self.get_parameter("min_stable_frames").value)
+        if self.stable_lane_frames < min_stable_frames:
+            confidence = min(
+                confidence,
+                float(self.get_parameter("temporal_confidence_cap").value),
+            )
 
         alpha = float(self.get_parameter("smoothing_alpha").value)
         alpha = float(np.clip(alpha, 0.0, 1.0))
