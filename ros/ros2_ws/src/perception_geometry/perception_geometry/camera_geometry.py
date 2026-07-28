@@ -156,10 +156,22 @@ class CameraIPM:
 
         Returns:
           (u_px, v_px)
+
+        Convention:
+          lateral_m = -width/2  -> u = 0
+          lateral_m = 0         -> u = image center
+          lateral_m = +width/2  -> u = width_px - 1
+
+          forward_m = forward_m -> v = 0
+          forward_m = 0         -> v near bottom if backward_m = 0
+          forward_m = -backward -> v = height_px - 1
         """
 
-        u = (lateral_m + 0.5 * self.bev_spec.width_m) / self.bev_spec.resolution_m
-        v = (self.bev_spec.forward_m - forward_m) / self.bev_spec.resolution_m
+        width_den = max(1.0, float(self.bev_spec.width_px - 1))
+        height_den = max(1.0, float(self.bev_spec.height_px - 1))
+
+        u = (lateral_m / self.bev_spec.width_m + 0.5) * width_den
+        v = ((self.bev_spec.forward_m - forward_m) / self.bev_spec.height_m) * height_den
 
         return float(u), float(v)
 
@@ -171,8 +183,11 @@ class CameraIPM:
           (forward_m, lateral_m)
         """
 
-        lateral_m = u_px * self.bev_spec.resolution_m - 0.5 * self.bev_spec.width_m
-        forward_m = self.bev_spec.forward_m - v_px * self.bev_spec.resolution_m
+        width_den = max(1.0, float(self.bev_spec.width_px - 1))
+        height_den = max(1.0, float(self.bev_spec.height_px - 1))
+
+        lateral_m = (u_px / width_den - 0.5) * self.bev_spec.width_m
+        forward_m = self.bev_spec.forward_m - (v_px / height_den) * self.bev_spec.height_m
 
         return float(forward_m), float(lateral_m)
 
