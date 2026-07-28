@@ -2,996 +2,1205 @@
 
 import json
 import math
-from typing import Optional, Tuple
+from typing import Any, Optional
 
 import cv2
 import numpy as np
 import rclpy
+from cv_bridge import CvBridge
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CompressedImage, Image
 from std_msgs.msg import String
+
+from perception_geometry import BEVSpec, CameraIPM, IPMConfig
+
+
+def clamp(value: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, value))
+
+
+def score_from_error(error: float, full_error: float, floor: float = 0.0) -> float:
+    if full_error <= 1e-6:
+        return 1.0
+    return clamp(1.0 - abs(error) / full_error, floor, 1.0)
 
 
 class LaneDetectionNode(Node):
     """
-    Classical lane detector.
+    LDv4: BEV-first classical lane detector.
 
-    v2:
-      - RGB/HLS thresholding for white/yellow markings
-      - optional semantic road ROI
-      - optional connected-component cleanup
-      - Hough segment extraction
-      - geometric filtering to reject crosswalks/horizontal markings
-      - conservative confidence scoring
+    Key idea:
+      - keep LDv3.3 shadow-gated color/adaptive mask
+      - warp mask to BEV
+      - reject horizontal/intersection-like structures in BEV
+      - select ego-lane left/right candidates in BEV
+      - publish image-space and BEV-space selected geometry
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__("lane_detection_node")
 
         # Topics
-        self.declare_parameter("rgb_topic", "/carla/rgb/image_raw/compressed")
-        self.declare_parameter("semantic_topic", "/perception/semantic_mask")
+        self.declare_parameter("image_topic", "/carla/rgb/image_raw/compressed")
+        self.declare_parameter("semantic_mask_topic", "/perception/semantic_mask")
         self.declare_parameter("lane_mask_topic", "/perception/lane_mask/compressed")
         self.declare_parameter("lane_overlay_topic", "/perception/lane_overlay/compressed")
         self.declare_parameter("lane_status_topic", "/perception/lane_status")
+        self.declare_parameter("lane_bev_debug_topic", "/perception/lane_bev_debug/compressed")
 
         # Semantic ROI
         self.declare_parameter("use_semantic_roi", True)
+        self.declare_parameter("require_semantic_roi", False)
         self.declare_parameter("road_class_id", 0)
         self.declare_parameter("min_road_area_ratio", 0.01)
         self.declare_parameter("road_dilate_iterations", 2)
 
         # Image ROI
-        self.declare_parameter("roi_x_min_ratio", 0.12)
-        self.declare_parameter("roi_x_max_ratio", 0.88)
-        self.declare_parameter("roi_y_min_ratio", 0.52)
-        self.declare_parameter("roi_y_max_ratio", 0.96)
+        self.declare_parameter("roi_x_min_ratio", 0.10)
+        self.declare_parameter("roi_x_max_ratio", 0.90)
+        self.declare_parameter("roi_y_min_ratio", 0.48)
+        self.declare_parameter("roi_y_max_ratio", 0.97)
 
-        # Lane color thresholds in HLS
-        self.declare_parameter("white_l_min", 170)
-        self.declare_parameter("white_s_max", 95)
+        # LDv3.3 strong white threshold
+        self.declare_parameter("white_l_min", 190)
+        self.declare_parameter("white_l_max", 255)
+        self.declare_parameter("white_s_min", 0)
+        self.declare_parameter("white_s_max", 70)
 
+        # LDv3.3 yellow threshold
         self.declare_parameter("yellow_h_min", 12)
         self.declare_parameter("yellow_h_max", 40)
         self.declare_parameter("yellow_l_min", 80)
         self.declare_parameter("yellow_l_max", 255)
-        self.declare_parameter("yellow_s_min", 80)
+        self.declare_parameter("yellow_s_min", 95)
         self.declare_parameter("yellow_s_max", 255)
 
-        # LDv3.2 shadow-aware local contrast white detection.
-        # This helps detect white lane markings in shadows, where absolute
-        # lightness thresholds fail.
+        # LDv3.3 shadow-gated adaptive white
         self.declare_parameter("use_adaptive_white", True)
         self.declare_parameter("use_clahe", True)
-        self.declare_parameter("clahe_clip_limit", 2.0)
+        self.declare_parameter("clahe_clip_limit", 1.5)
         self.declare_parameter("clahe_tile_grid_size", 8)
-        self.declare_parameter("adaptive_white_block_size", 41)
-        self.declare_parameter("adaptive_white_c", -6)
-        self.declare_parameter("adaptive_white_min_l", 60)
-        self.declare_parameter("adaptive_white_s_max", 145)
-
-        # Gate adaptive white so it only helps in shadows/dark regions.
-        # In bright regions, adaptive thresholding tends to over-detect
-        # asphalt texture, cracks, and sunlit speckles.
-        self.declare_parameter("adaptive_white_shadow_l_max", 155)
+        self.declare_parameter("adaptive_white_block_size", 61)
+        self.declare_parameter("adaptive_white_c", -10)
+        self.declare_parameter("adaptive_white_min_l", 50)
+        self.declare_parameter("adaptive_white_s_max", 120)
         self.declare_parameter("adaptive_white_use_shadow_gate", True)
+        self.declare_parameter("adaptive_white_shadow_l_max", 125)
 
-        # Optional edge filtering
+        # Optional edge gate
         self.declare_parameter("use_canny_edges", False)
-        self.declare_parameter("canny_low", 60)
-        self.declare_parameter("canny_high", 160)
+        self.declare_parameter("canny_low", 40)
+        self.declare_parameter("canny_high", 130)
 
         # Morphology
         self.declare_parameter("morph_kernel_size", 3)
         self.declare_parameter("dilate_iterations", 0)
 
-        # Connected component filtering
+        # Component filtering
         self.declare_parameter("use_component_filter", True)
-        self.declare_parameter("min_component_area", 20)
-        self.declare_parameter("max_component_area", 2200)
-        self.declare_parameter("max_component_width", 120)
-        self.declare_parameter("min_component_height", 8)
-        self.declare_parameter("min_component_aspect", 0.35)
-        self.declare_parameter("max_component_fill_ratio", 0.75)
-        self.declare_parameter("min_component_y_ratio", 0.48)
+        self.declare_parameter("min_component_area", 10)
+        self.declare_parameter("max_component_area", 2600)
+        self.declare_parameter("max_component_width", 150)
+        self.declare_parameter("min_component_height", 5)
+        self.declare_parameter("min_component_aspect", 0.16)
+        self.declare_parameter("max_component_fill_ratio", 0.70)
 
-        # Hough candidate filtering
+        # Hough parameters. Kept with old names so the startup script remains compatible.
         self.declare_parameter("use_hough_fit", True)
-        self.declare_parameter("hough_threshold", 18)
-        self.declare_parameter("hough_min_line_length", 25)
-        self.declare_parameter("hough_max_line_gap", 20)
-        self.declare_parameter("min_segment_angle_deg", 18.0)
+        self.declare_parameter("hough_threshold", 16)
+        self.declare_parameter("hough_min_line_length", 18)
+        self.declare_parameter("hough_max_line_gap", 24)
+        self.declare_parameter("min_segment_angle_deg", 22.0)
         self.declare_parameter("max_segment_angle_deg", 88.0)
-        self.declare_parameter("min_segment_length_px", 22.0)
-        self.declare_parameter("min_segment_y_ratio", 0.48)
-        self.declare_parameter("max_segments_per_side", 10)
+        self.declare_parameter("min_segment_length_px", 16.0)
+        self.declare_parameter("min_y_span_px", 32)
+        self.declare_parameter("max_abs_dxdy", 2.0)
+        self.declare_parameter("max_segments_per_side", 4)
 
-        # Fitting
-        self.declare_parameter("min_lane_pixels", 80)
-        self.declare_parameter("min_y_span_px", 55)
-        self.declare_parameter("split_margin_px", 10)
-        self.declare_parameter("max_abs_dxdy", 1.8)
-        self.declare_parameter("lane_width_px", 360.0)
-        self.declare_parameter("fit_top_y_ratio", 0.62)
-        self.declare_parameter("fit_bottom_y_ratio", 0.95)
-
-        # Confidence and temporal consistency
-        self.declare_parameter("max_confident_heading_deg", 25.0)
+        # Old compatibility parameters. Some are not directly used by LDv4,
+        # but they are declared so existing launch/startup commands do not fail.
+        self.declare_parameter("max_confident_heading_deg", 20.0)
         self.declare_parameter("max_output_heading_deg", 38.0)
-        self.declare_parameter("max_confident_offset_ratio", 0.33)
-        self.declare_parameter("smoothing_alpha", 0.35)
-        self.declare_parameter("max_offset_jump_px", 120.0)
-        self.declare_parameter("max_heading_jump_deg", 25.0)
-
-        # LDv3 consistency and confidence gates
         self.declare_parameter("enforce_perspective_consistency", True)
         self.declare_parameter("perspective_slope_tolerance", 0.18)
-        self.declare_parameter("min_lane_width_px", 180.0)
-        self.declare_parameter("max_lane_width_px", 650.0)
-        self.declare_parameter("single_side_confidence_cap", 0.58)
+        self.declare_parameter("min_lane_width_px", 200.0)
+        self.declare_parameter("max_lane_width_px", 600.0)
+        self.declare_parameter("single_side_confidence_cap", 0.50)
         self.declare_parameter("invalid_width_confidence_cap", 0.35)
         self.declare_parameter("min_stable_frames", 3)
-        self.declare_parameter("temporal_confidence_cap", 0.65)
+        self.declare_parameter("temporal_confidence_cap", 0.60)
 
-        # Runtime
-        self.declare_parameter("process_every_n", 1)
-        self.declare_parameter("publish_debug_overlay", True)
+        # BEV projection
+        self.declare_parameter("bev_forward_m", 45.0)
+        self.declare_parameter("bev_width_m", 16.0)
+        self.declare_parameter("bev_resolution", 0.10)
 
-        self.rgb_topic = self.get_parameter("rgb_topic").value
-        self.semantic_topic = self.get_parameter("semantic_topic").value
-        self.lane_mask_topic = self.get_parameter("lane_mask_topic").value
-        self.lane_overlay_topic = self.get_parameter("lane_overlay_topic").value
-        self.lane_status_topic = self.get_parameter("lane_status_topic").value
+        self.declare_parameter("src_bottom_y_ratio", 0.97)
+        self.declare_parameter("src_top_y_ratio", 0.48)
+        self.declare_parameter("src_bottom_left_x_ratio", 0.10)
+        self.declare_parameter("src_bottom_right_x_ratio", 0.90)
+        self.declare_parameter("src_top_left_x_ratio", 0.42)
+        self.declare_parameter("src_top_right_x_ratio", 0.58)
 
-        self.latest_semantic_msg: Optional[Image] = None
-        self.frame_count = 0
+        # BEV candidate selection
+        self.declare_parameter("bev_fit_top_y_ratio", 0.08)
+        self.declare_parameter("bev_max_angle_from_vertical_deg", 28.0)
+        self.declare_parameter("bev_min_y_span_px", 30.0)
+        self.declare_parameter("bev_max_abs_dxdy", 0.75)
+        self.declare_parameter("bev_min_side_distance_m", 0.35)
 
-        self.prev_center_offset_px: Optional[float] = None
-        self.prev_heading_error_deg: Optional[float] = None
-        self.stable_lane_frames = 0
+        self.declare_parameter("expected_lane_width_m", 3.6)
+        self.declare_parameter("min_lane_width_m", 2.3)
+        self.declare_parameter("max_lane_width_m", 5.4)
+        self.declare_parameter("pair_center_full_error_m", 3.0)
+        self.declare_parameter("pair_width_full_error_m", 1.8)
+        self.declare_parameter("pair_parallel_full_error", 0.45)
+        self.declare_parameter("pair_heading_full_error_deg", 24.0)
+        self.declare_parameter("min_pair_score", 0.18)
 
-        self.create_subscription(CompressedImage, self.rgb_topic, self.rgb_callback, 10)
-        self.create_subscription(Image, self.semantic_topic, self.semantic_callback, 10)
+        # Temporal/confidence
+        self.declare_parameter("smoothing_alpha", 0.35)
+        self.declare_parameter("max_offset_jump_px", 150.0)
+        self.declare_parameter("max_heading_jump_deg", 30.0)
 
-        self.lane_mask_pub = self.create_publisher(CompressedImage, self.lane_mask_topic, 10)
-        self.lane_overlay_pub = self.create_publisher(CompressedImage, self.lane_overlay_topic, 10)
-        self.status_pub = self.create_publisher(String, self.lane_status_topic, 10)
+        # Debug/output
+        self.declare_parameter("overlay_jpeg_quality", 85)
+        self.declare_parameter("bev_debug_jpeg_quality", 90)
+        self.declare_parameter("draw_all_bev_candidates", True)
 
-        self.get_logger().info("Lane detection node v2 started")
-        self.get_logger().info(f"RGB topic: {self.rgb_topic}")
-        self.get_logger().info(f"Semantic topic: {self.semantic_topic}")
+        # Shared camera/IPM geometry utility.
+        # This centralizes the image <-> BEV <-> metric conversions that used
+        # to be duplicated inside this node.
+        self.ipm = self.make_ipm()
 
-    def semantic_callback(self, msg: Image) -> None:
-        self.latest_semantic_msg = msg
+        self.bridge = CvBridge()
+        self.latest_semantic_mask: Optional[np.ndarray] = None
 
-    def rgb_callback(self, msg: CompressedImage) -> None:
-        self.frame_count += 1
-        process_every_n = int(self.get_parameter("process_every_n").value)
-        if process_every_n > 1 and self.frame_count % process_every_n != 0:
-            return
+        self.prev_offset_px: Optional[float] = None
+        self.prev_heading_deg: Optional[float] = None
+        self.stable_frames = 0
 
-        bgr = self.decode_compressed_bgr(msg)
-        if bgr is None:
-            return
+        image_topic = str(self.p("image_topic"))
+        semantic_topic = str(self.p("semantic_mask_topic"))
 
-        h, w = bgr.shape[:2]
-
-        roi_mask = self.build_roi_mask(h, w)
-        road_mask = self.build_road_mask(h, w)
-
-        lane_mask = self.detect_lane_candidates(bgr, roi_mask, road_mask)
-        left_fit, right_fit, fit_debug = self.fit_lane_sides(lane_mask)
-
-        status = self.compute_status(
-            image_width=w,
-            image_height=h,
-            left_fit=left_fit,
-            right_fit=right_fit,
-            lane_mask=lane_mask,
-            fit_debug=fit_debug,
+        self.image_sub = self.create_subscription(
+            CompressedImage,
+            image_topic,
+            self.image_cb,
+            qos_profile_sensor_data,
+        )
+        self.semantic_sub = self.create_subscription(
+            Image,
+            semantic_topic,
+            self.semantic_cb,
+            qos_profile_sensor_data,
         )
 
-        self.publish_mask(msg, lane_mask)
-        self.publish_overlay(msg, bgr, lane_mask, left_fit, right_fit, status, fit_debug)
-        self.status_pub.publish(String(data=json.dumps(status)))
+        self.mask_pub = self.create_publisher(
+            CompressedImage,
+            str(self.p("lane_mask_topic")),
+            10,
+        )
+        self.overlay_pub = self.create_publisher(
+            CompressedImage,
+            str(self.p("lane_overlay_topic")),
+            10,
+        )
+        self.status_pub = self.create_publisher(
+            String,
+            str(self.p("lane_status_topic")),
+            10,
+        )
+        self.bev_debug_pub = self.create_publisher(
+            CompressedImage,
+            str(self.p("lane_bev_debug_topic")),
+            10,
+        )
 
-    def decode_compressed_bgr(self, msg: CompressedImage) -> Optional[np.ndarray]:
-        data = np.frombuffer(msg.data, dtype=np.uint8)
-        image = cv2.imdecode(data, cv2.IMREAD_COLOR)
-        if image is None:
-            self.get_logger().warning("Failed to decode RGB compressed image")
-            return None
-        return image
+        self.get_logger().info("LDv4 BEV-first lane detector started")
+        self.get_logger().info(f"Subscribing image: {image_topic}")
+        self.get_logger().info(f"Subscribing semantic mask: {semantic_topic}")
+        self.get_logger().info(f"Publishing overlay: {self.p('lane_overlay_topic')}")
+        self.get_logger().info(f"Publishing BEV debug: {self.p('lane_bev_debug_topic')}")
 
-    def image_msg_to_numpy(self, msg: Image) -> Optional[np.ndarray]:
-        encoding = msg.encoding.lower()
+    def p(self, name: str) -> Any:
+        return self.get_parameter(name).value
 
+    def make_ipm(self) -> CameraIPM:
+        return CameraIPM(
+            IPMConfig(
+                src_bottom_y_ratio=float(self.p("src_bottom_y_ratio")),
+                src_top_y_ratio=float(self.p("src_top_y_ratio")),
+                src_bottom_left_x_ratio=float(self.p("src_bottom_left_x_ratio")),
+                src_bottom_right_x_ratio=float(self.p("src_bottom_right_x_ratio")),
+                src_top_left_x_ratio=float(self.p("src_top_left_x_ratio")),
+                src_top_right_x_ratio=float(self.p("src_top_right_x_ratio")),
+            ),
+            BEVSpec(
+                forward_m=float(self.p("bev_forward_m")),
+                backward_m=0.0,
+                width_m=float(self.p("bev_width_m")),
+                resolution_m=float(self.p("bev_resolution")),
+            ),
+        )
+
+    def semantic_cb(self, msg: Image) -> None:
         try:
-            if encoding in ("mono8", "8uc1"):
-                arr = np.frombuffer(msg.data, dtype=np.uint8)
-                arr = arr.reshape((msg.height, msg.step))
-                return arr[:, :msg.width]
+            mask = self.bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
+            if mask.ndim == 3:
+                mask = mask[:, :, 0]
+            self.latest_semantic_mask = mask.astype(np.uint8)
+        except Exception as exc:
+            self.get_logger().warn(f"Could not decode semantic mask: {exc}")
 
-            if encoding in ("16uc1", "mono16"):
-                arr = np.frombuffer(msg.data, dtype=np.uint16)
-                arr = arr.reshape((msg.height, msg.step // 2))
-                return arr[:, :msg.width]
+    def image_cb(self, msg: CompressedImage) -> None:
+        frame = self.decode_compressed(msg)
+        if frame is None:
+            return
 
-            if encoding == "32sc1":
-                arr = np.frombuffer(msg.data, dtype=np.int32)
-                arr = arr.reshape((msg.height, msg.step // 4))
-                return arr[:, :msg.width]
+        lane_mask, overlay, bev_debug, status = self.process_frame(frame)
 
-            if encoding in ("rgb8", "bgr8"):
-                arr = np.frombuffer(msg.data, dtype=np.uint8)
-                arr = arr.reshape((msg.height, msg.step // 3, 3))
-                return arr[:, :msg.width, :]
+        self.publish_compressed(
+            self.mask_pub,
+            lane_mask,
+            msg.header,
+            ext=".png",
+            fmt="png",
+        )
+        self.publish_compressed(
+            self.overlay_pub,
+            overlay,
+            msg.header,
+            ext=".jpg",
+            fmt="jpeg",
+            jpeg_quality=int(self.p("overlay_jpeg_quality")),
+        )
+        self.publish_compressed(
+            self.bev_debug_pub,
+            bev_debug,
+            msg.header,
+            ext=".jpg",
+            fmt="jpeg",
+            jpeg_quality=int(self.p("bev_debug_jpeg_quality")),
+        )
 
-            self.get_logger().warning(f"Unsupported semantic mask encoding: {msg.encoding}")
+        status_msg = String()
+        status_msg.data = json.dumps(status, separators=(",", ":"))
+        self.status_pub.publish(status_msg)
+
+    def decode_compressed(self, msg: CompressedImage) -> Optional[np.ndarray]:
+        try:
+            arr = np.frombuffer(msg.data, dtype=np.uint8)
+            return cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        except Exception as exc:
+            self.get_logger().warn(f"Could not decode compressed image: {exc}")
             return None
 
-        except ValueError as exc:
-            self.get_logger().warning(f"Failed to reshape semantic mask: {exc}")
-            return None
+    def publish_compressed(
+        self,
+        pub,
+        image: np.ndarray,
+        header,
+        ext: str,
+        fmt: str,
+        jpeg_quality: int = 85,
+    ) -> None:
+        params = []
+        if ext.lower() in [".jpg", ".jpeg"]:
+            params = [int(cv2.IMWRITE_JPEG_QUALITY), int(jpeg_quality)]
+
+        ok, encoded = cv2.imencode(ext, image, params)
+        if not ok:
+            self.get_logger().warn(f"Could not encode {fmt} image")
+            return
+
+        out = CompressedImage()
+        out.header = header
+        out.format = fmt
+        out.data = encoded.tobytes()
+        pub.publish(out)
 
     def build_roi_mask(self, h: int, w: int) -> np.ndarray:
-        x_min = int(w * float(self.get_parameter("roi_x_min_ratio").value))
-        x_max = int(w * float(self.get_parameter("roi_x_max_ratio").value))
-        y_min = int(h * float(self.get_parameter("roi_y_min_ratio").value))
-        y_max = int(h * float(self.get_parameter("roi_y_max_ratio").value))
+        x0 = int(w * float(self.p("roi_x_min_ratio")))
+        x1 = int(w * float(self.p("roi_x_max_ratio")))
+        y0 = int(h * float(self.p("roi_y_min_ratio")))
+        y1 = int(h * float(self.p("roi_y_max_ratio")))
 
-        mask = np.zeros((h, w), dtype=np.uint8)
-        mask[y_min:y_max, x_min:x_max] = 255
-        return mask
+        roi = np.zeros((h, w), dtype=np.uint8)
+        roi[y0:y1, x0:x1] = 255
+        return roi
 
-    def build_road_mask(self, h: int, w: int) -> np.ndarray:
-        use_semantic_roi = bool(self.get_parameter("use_semantic_roi").value)
-        if not use_semantic_roi or self.latest_semantic_msg is None:
-            return np.full((h, w), 255, dtype=np.uint8)
+    def build_semantic_road_mask(self, h: int, w: int) -> Optional[np.ndarray]:
+        if not bool(self.p("use_semantic_roi")):
+            return None
 
-        semantic = self.image_msg_to_numpy(self.latest_semantic_msg)
-        if semantic is None:
-            return np.full((h, w), 255, dtype=np.uint8)
+        if self.latest_semantic_mask is None:
+            return None
 
-        if semantic.ndim == 3:
-            semantic = semantic[:, :, 0]
+        sem = self.latest_semantic_mask
+        if sem.shape[:2] != (h, w):
+            sem = cv2.resize(sem, (w, h), interpolation=cv2.INTER_NEAREST)
 
-        semantic = cv2.resize(semantic, (w, h), interpolation=cv2.INTER_NEAREST)
+        road_class_id = int(self.p("road_class_id"))
+        road = (sem == road_class_id).astype(np.uint8) * 255
 
-        road_class_id = int(self.get_parameter("road_class_id").value)
-        road_mask = np.zeros((h, w), dtype=np.uint8)
-        road_mask[semantic == road_class_id] = 255
+        if np.count_nonzero(road) < float(self.p("min_road_area_ratio")) * h * w:
+            return None
 
-        road_area_ratio = float(np.mean(road_mask > 0))
-        min_road_area_ratio = float(self.get_parameter("min_road_area_ratio").value)
-
-        if road_area_ratio < min_road_area_ratio:
-            self.get_logger().warning(
-                f"Road semantic ROI too small ({road_area_ratio:.3f}); falling back to image ROI only"
+        dilate_iter = int(self.p("road_dilate_iterations"))
+        if dilate_iter > 0:
+            road = cv2.dilate(
+                road,
+                np.ones((5, 5), dtype=np.uint8),
+                iterations=dilate_iter,
             )
-            return np.full((h, w), 255, dtype=np.uint8)
 
-        iterations = int(self.get_parameter("road_dilate_iterations").value)
-        if iterations > 0:
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-            road_mask = cv2.dilate(road_mask, kernel, iterations=iterations)
-
-        return road_mask
+        return road
 
     def detect_adaptive_white(self, bgr: np.ndarray, hls: np.ndarray) -> np.ndarray:
-        if not bool(self.get_parameter("use_adaptive_white").value):
-            h, w = bgr.shape[:2]
+        h, w = bgr.shape[:2]
+
+        if not bool(self.p("use_adaptive_white")):
             return np.zeros((h, w), dtype=np.uint8)
 
         l_channel = hls[:, :, 1]
         s_channel = hls[:, :, 2]
-
         work = l_channel.copy()
 
-        if bool(self.get_parameter("use_clahe").value):
-            clip_limit = float(self.get_parameter("clahe_clip_limit").value)
-            tile_size = int(self.get_parameter("clahe_tile_grid_size").value)
-            tile_size = max(2, tile_size)
-
-            clahe = cv2.createCLAHE(
-                clipLimit=clip_limit,
-                tileGridSize=(tile_size, tile_size),
-            )
+        if bool(self.p("use_clahe")):
+            clip = float(self.p("clahe_clip_limit"))
+            tile = max(2, int(self.p("clahe_tile_grid_size")))
+            clahe = cv2.createCLAHE(clipLimit=clip, tileGridSize=(tile, tile))
             work = clahe.apply(work)
 
-        block_size = int(self.get_parameter("adaptive_white_block_size").value)
-        block_size = max(3, block_size)
-        if block_size % 2 == 0:
-            block_size += 1
-
-        adaptive_c = int(self.get_parameter("adaptive_white_c").value)
+        block = max(3, int(self.p("adaptive_white_block_size")))
+        if block % 2 == 0:
+            block += 1
 
         adaptive = cv2.adaptiveThreshold(
             work,
             255,
             cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY,
-            block_size,
-            adaptive_c,
+            block,
+            int(self.p("adaptive_white_c")),
         )
 
-        min_l = int(self.get_parameter("adaptive_white_min_l").value)
-        s_max = int(self.get_parameter("adaptive_white_s_max").value)
+        min_l_mask = cv2.inRange(l_channel, int(self.p("adaptive_white_min_l")), 255)
+        low_s_mask = cv2.inRange(s_channel, 0, int(self.p("adaptive_white_s_max")))
 
-        min_l_mask = cv2.inRange(l_channel, min_l, 255)
-        low_saturation_mask = cv2.inRange(s_channel, 0, s_max)
+        out = cv2.bitwise_and(adaptive, min_l_mask)
+        out = cv2.bitwise_and(out, low_s_mask)
 
-        adaptive_white = cv2.bitwise_and(adaptive, min_l_mask)
-        adaptive_white = cv2.bitwise_and(adaptive_white, low_saturation_mask)
+        if bool(self.p("adaptive_white_use_shadow_gate")):
+            shadow_mask = cv2.inRange(l_channel, 0, int(self.p("adaptive_white_shadow_l_max")))
+            out = cv2.bitwise_and(out, shadow_mask)
 
-        if bool(self.get_parameter("adaptive_white_use_shadow_gate").value):
-            shadow_l_max = int(self.get_parameter("adaptive_white_shadow_l_max").value)
-            shadow_mask = cv2.inRange(l_channel, 0, shadow_l_max)
-            adaptive_white = cv2.bitwise_and(adaptive_white, shadow_mask)
+        return out
 
-        return adaptive_white
-
-    def detect_lane_candidates(
-        self,
-        bgr: np.ndarray,
-        roi_mask: np.ndarray,
-        road_mask: np.ndarray,
-    ) -> np.ndarray:
+    def detect_lane_mask(self, bgr: np.ndarray) -> tuple[np.ndarray, dict[str, int]]:
+        h, w = bgr.shape[:2]
         hls = cv2.cvtColor(bgr, cv2.COLOR_BGR2HLS)
-
-        white_l_min = int(self.get_parameter("white_l_min").value)
-        white_s_max = int(self.get_parameter("white_s_max").value)
 
         white_mask = cv2.inRange(
             hls,
-            np.array([0, white_l_min, 0], dtype=np.uint8),
-            np.array([179, 255, white_s_max], dtype=np.uint8),
+            np.array(
+                [
+                    0,
+                    int(self.p("white_l_min")),
+                    int(self.p("white_s_min")),
+                ],
+                dtype=np.uint8,
+            ),
+            np.array(
+                [
+                    179,
+                    int(self.p("white_l_max")),
+                    int(self.p("white_s_max")),
+                ],
+                dtype=np.uint8,
+            ),
         )
 
         yellow_mask = cv2.inRange(
             hls,
-            np.array([
-                int(self.get_parameter("yellow_h_min").value),
-                int(self.get_parameter("yellow_l_min").value),
-                int(self.get_parameter("yellow_s_min").value),
-            ], dtype=np.uint8),
-            np.array([
-                int(self.get_parameter("yellow_h_max").value),
-                int(self.get_parameter("yellow_l_max").value),
-                int(self.get_parameter("yellow_s_max").value),
-            ], dtype=np.uint8),
+            np.array(
+                [
+                    int(self.p("yellow_h_min")),
+                    int(self.p("yellow_l_min")),
+                    int(self.p("yellow_s_min")),
+                ],
+                dtype=np.uint8,
+            ),
+            np.array(
+                [
+                    int(self.p("yellow_h_max")),
+                    int(self.p("yellow_l_max")),
+                    int(self.p("yellow_s_max")),
+                ],
+                dtype=np.uint8,
+            ),
         )
 
-        adaptive_white_mask = self.detect_adaptive_white(bgr, hls)
+        adaptive_white = self.detect_adaptive_white(bgr, hls)
 
         lane_mask = cv2.bitwise_or(white_mask, yellow_mask)
-        lane_mask = cv2.bitwise_or(lane_mask, adaptive_white_mask)
+        lane_mask = cv2.bitwise_or(lane_mask, adaptive_white)
 
-        lane_mask = cv2.bitwise_and(lane_mask, roi_mask)
-        lane_mask = cv2.bitwise_and(lane_mask, road_mask)
+        roi = self.build_roi_mask(h, w)
+        lane_mask = cv2.bitwise_and(lane_mask, roi)
 
-        if bool(self.get_parameter("use_canny_edges").value):
+        road = self.build_semantic_road_mask(h, w)
+        if road is not None:
+            lane_mask = cv2.bitwise_and(lane_mask, road)
+        elif bool(self.p("require_semantic_roi")):
+            lane_mask[:] = 0
+
+        if bool(self.p("use_canny_edges")):
             gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-            gray = cv2.GaussianBlur(gray, (5, 5), 0)
-            edges = cv2.Canny(
-                gray,
-                int(self.get_parameter("canny_low").value),
-                int(self.get_parameter("canny_high").value),
-            )
-            edge_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-            edges = cv2.dilate(edges, edge_kernel, iterations=1)
+            edges = cv2.Canny(gray, int(self.p("canny_low")), int(self.p("canny_high")))
+            edges = cv2.dilate(edges, np.ones((3, 3), dtype=np.uint8), iterations=1)
             lane_mask = cv2.bitwise_and(lane_mask, edges)
 
-        kernel_size = int(self.get_parameter("morph_kernel_size").value)
-        kernel_size = max(1, kernel_size)
-        if kernel_size % 2 == 0:
-            kernel_size += 1
+        k = max(1, int(self.p("morph_kernel_size")))
+        if k > 1:
+            kernel = np.ones((k, k), dtype=np.uint8)
+            lane_mask = cv2.morphologyEx(lane_mask, cv2.MORPH_OPEN, kernel, iterations=1)
+            lane_mask = cv2.morphologyEx(lane_mask, cv2.MORPH_CLOSE, kernel, iterations=1)
 
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
+        dilate_iter = int(self.p("dilate_iterations"))
+        if dilate_iter > 0:
+            lane_mask = cv2.dilate(
+                lane_mask,
+                np.ones((k, k), dtype=np.uint8),
+                iterations=dilate_iter,
+            )
 
-        lane_mask = cv2.morphologyEx(lane_mask, cv2.MORPH_OPEN, kernel)
-        lane_mask = cv2.morphologyEx(lane_mask, cv2.MORPH_CLOSE, kernel)
+        debug = {
+            "strong_white_pixels": int(np.count_nonzero(white_mask)),
+            "yellow_pixels": int(np.count_nonzero(yellow_mask)),
+            "adaptive_white_pixels": int(np.count_nonzero(adaptive_white)),
+            "merged_pixels_before_components": int(np.count_nonzero(lane_mask)),
+        }
 
-        dilate_iterations = int(self.get_parameter("dilate_iterations").value)
-        if dilate_iterations > 0:
-            lane_mask = cv2.dilate(lane_mask, kernel, iterations=dilate_iterations)
+        if bool(self.p("use_component_filter")):
+            lane_mask = self.filter_components(lane_mask)
 
-        lane_mask = self.filter_lane_components(lane_mask)
+        debug["final_lane_pixels"] = int(np.count_nonzero(lane_mask))
+        return lane_mask, debug
 
-        return lane_mask
+    def filter_components(self, mask: np.ndarray) -> np.ndarray:
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        out = np.zeros_like(mask)
 
-    def filter_lane_components(self, lane_mask: np.ndarray) -> np.ndarray:
-        if not bool(self.get_parameter("use_component_filter").value):
-            return lane_mask
-
-        h, _ = lane_mask.shape[:2]
-
-        min_area = int(self.get_parameter("min_component_area").value)
-        max_area = int(self.get_parameter("max_component_area").value)
-        max_width = int(self.get_parameter("max_component_width").value)
-        min_height = int(self.get_parameter("min_component_height").value)
-        min_aspect = float(self.get_parameter("min_component_aspect").value)
-        max_fill = float(self.get_parameter("max_component_fill_ratio").value)
-        min_y = int(h * float(self.get_parameter("min_component_y_ratio").value))
-
-        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(lane_mask, connectivity=8)
-        filtered = np.zeros_like(lane_mask)
+        min_area = int(self.p("min_component_area"))
+        max_area = int(self.p("max_component_area"))
+        max_width = int(self.p("max_component_width"))
+        min_height = int(self.p("min_component_height"))
+        min_aspect = float(self.p("min_component_aspect"))
+        max_fill = float(self.p("max_component_fill_ratio"))
 
         for label in range(1, num_labels):
-            x = int(stats[label, cv2.CC_STAT_LEFT])
-            y = int(stats[label, cv2.CC_STAT_TOP])
-            bw = int(stats[label, cv2.CC_STAT_WIDTH])
-            bh = int(stats[label, cv2.CC_STAT_HEIGHT])
-            area = int(stats[label, cv2.CC_STAT_AREA])
+            x, y, w, h, area = stats[label]
 
             if area < min_area or area > max_area:
                 continue
-            if y + bh < min_y:
+            if w > max_width:
                 continue
-            if bw > max_width:
-                continue
-            if bh < min_height:
+            if h < min_height:
                 continue
 
-            aspect = bh / max(1.0, float(bw))
+            aspect = max(w, h) / max(1.0, float(min(w, h)))
             if aspect < min_aspect:
                 continue
 
-            fill_ratio = area / max(1.0, float(bw * bh))
-            if fill_ratio > max_fill:
+            fill = area / max(1.0, float(w * h))
+            if fill > max_fill:
                 continue
 
-            filtered[labels == label] = 255
+            out[labels == label] = 255
 
-        return filtered
+        return out
 
-    def fit_lane_sides(self, lane_mask: np.ndarray):
-        if bool(self.get_parameter("use_hough_fit").value):
-            return self.fit_lane_sides_hough(lane_mask)
+    def bev_shape(self) -> tuple[int, int]:
+        self.ipm = self.make_ipm()
+        return self.ipm.bev_spec.width_px, self.ipm.bev_spec.height_px
 
-        left_fit, right_fit = self.fit_lane_sides_pixels(lane_mask)
-        return left_fit, right_fit, {
-            "fit_method": "pixels",
-            "accepted_segments": 0,
-            "left_segments": 0,
-            "right_segments": 0,
-            "total_segment_length": 0.0,
-        }
+    def build_bev_homography(self, image_w: int, image_h: int) -> tuple[np.ndarray, np.ndarray, int, int]:
+        self.ipm = self.make_ipm()
+        image_to_bev, bev_to_image = self.ipm.homographies(image_w, image_h)
+        return image_to_bev, bev_to_image, self.ipm.bev_spec.width_px, self.ipm.bev_spec.height_px
 
-    def fit_lane_sides_pixels(self, lane_mask: np.ndarray):
-        h, w = lane_mask.shape[:2]
-        ys, xs = np.nonzero(lane_mask > 0)
-
-        if len(xs) == 0:
-            return None, None
-
-        mid_x = w // 2
-        split_margin = int(self.get_parameter("split_margin_px").value)
-
-        left_selection = xs < (mid_x - split_margin)
-        right_selection = xs > (mid_x + split_margin)
-
-        left_fit = self.fit_side_from_points(xs[left_selection], ys[left_selection], "left")
-        right_fit = self.fit_side_from_points(xs[right_selection], ys[right_selection], "right")
-
-        return left_fit, right_fit
-
-    def fit_lane_sides_hough(self, lane_mask: np.ndarray):
-        h, w = lane_mask.shape[:2]
-        y_top = int(h * float(self.get_parameter("fit_top_y_ratio").value))
-        y_bottom = int(h * float(self.get_parameter("fit_bottom_y_ratio").value))
-
-        lines = cv2.HoughLinesP(
+    def warp_to_bev(self, lane_mask: np.ndarray, h_mat: np.ndarray, bev_w: int, bev_h: int) -> np.ndarray:
+        bev = self.ipm.warp_image_to_bev(
             lane_mask,
-            rho=1,
-            theta=np.pi / 180.0,
-            threshold=int(self.get_parameter("hough_threshold").value),
-            minLineLength=int(self.get_parameter("hough_min_line_length").value),
-            maxLineGap=int(self.get_parameter("hough_max_line_gap").value),
+            h_mat,
+            interpolation=cv2.INTER_NEAREST,
+            border_value=0,
         )
 
-        debug = {
-            "fit_method": "hough",
-            "raw_segments": 0,
-            "accepted_segments": 0,
-            "left_segments": 0,
-            "right_segments": 0,
-            "total_segment_length": 0.0,
-            "segments": [],
-        }
+        # Light BEV cleanup. This mainly removes isolated road-texture speckles.
+        kernel = np.ones((3, 3), dtype=np.uint8)
+        bev = cv2.morphologyEx(bev, cv2.MORPH_OPEN, kernel, iterations=1)
+        return bev
+
+    def bev_x_to_lateral(self, x: float, bev_w: int) -> float:
+        _, lateral_m = self.ipm.bev_pixel_to_metric(float(x), 0.0)
+        return float(lateral_m)
+
+    def bev_y_to_forward(self, y: float, bev_h: int) -> float:
+        forward_m, _ = self.ipm.bev_pixel_to_metric(0.0, float(y))
+        return float(forward_m)
+
+    def lateral_to_bev_x(self, lateral_m: float, bev_w: int) -> float:
+        x_px, _ = self.ipm.metric_to_bev_pixel(0.0, float(lateral_m))
+        return float(x_px)
+
+    def extract_bev_candidates(self, bev_mask: np.ndarray) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+        bev_h, bev_w = bev_mask.shape[:2]
+        center_x = bev_w * 0.5
+
+        lines = cv2.HoughLinesP(
+            bev_mask,
+            rho=1,
+            theta=np.pi / 180.0,
+            threshold=int(self.p("hough_threshold")),
+            minLineLength=int(self.p("hough_min_line_length")),
+            maxLineGap=int(self.p("hough_max_line_gap")),
+        )
+
+        raw_count = 0 if lines is None else len(lines)
+        left: list[dict[str, Any]] = []
+        right: list[dict[str, Any]] = []
 
         if lines is None:
-            return None, None, debug
+            return left, right, {
+                "raw_bev_hough_segments": 0,
+                "accepted_bev_segments": 0,
+                "candidate_count_left": 0,
+                "candidate_count_right": 0,
+            }
 
-        debug["raw_segments"] = int(len(lines))
+        max_angle_vertical = float(self.p("bev_max_angle_from_vertical_deg"))
+        min_y_span = float(self.p("bev_min_y_span_px"))
+        min_length = float(self.p("min_segment_length_px"))
+        max_abs_dxdy = float(self.p("bev_max_abs_dxdy"))
+        min_side_distance_px = float(self.p("bev_min_side_distance_m")) / float(self.p("bev_resolution"))
+        max_per_side = int(self.p("max_segments_per_side"))
 
-        min_angle = float(self.get_parameter("min_segment_angle_deg").value)
-        max_angle = float(self.get_parameter("max_segment_angle_deg").value)
-        min_length = float(self.get_parameter("min_segment_length_px").value)
-        min_y = int(h * float(self.get_parameter("min_segment_y_ratio").value))
-        max_abs_dxdy = float(self.get_parameter("max_abs_dxdy").value)
-        split_margin = int(self.get_parameter("split_margin_px").value)
-        max_segments = int(self.get_parameter("max_segments_per_side").value)
+        fit_y_bottom = float(bev_h - 1)
+        fit_y_top = float(bev_h) * float(self.p("bev_fit_top_y_ratio"))
 
-        mid_x = 0.5 * w
-        left_candidates = []
-        right_candidates = []
+        accepted = 0
 
-        for raw in lines:
-            x1, y1, x2, y2 = [float(v) for v in raw[0]]
+        for raw in lines[:, 0, :]:
+            x1, y1, x2, y2 = [float(v) for v in raw]
 
             dx = x2 - x1
             dy = y2 - y1
             length = math.hypot(dx, dy)
+            y_span = abs(dy)
 
             if length < min_length:
                 continue
-
-            if max(y1, y2) < min_y:
+            if y_span < min_y_span:
                 continue
 
-            angle = abs(math.degrees(math.atan2(dy, dx)))
-            if angle < min_angle or angle > max_angle:
+            # In BEV, lane boundaries should be close to vertical.
+            angle_from_vertical = abs(math.degrees(math.atan2(dx, dy)))
+            if angle_from_vertical > 90.0:
+                angle_from_vertical = 180.0 - angle_from_vertical
+
+            if abs(angle_from_vertical) > max_angle_vertical:
                 continue
 
-            if abs(dy) < 1.0:
+            abs_dxdy = abs(dx) / max(1.0, abs(dy))
+            if abs_dxdy > max_abs_dxdy:
                 continue
 
-            # Fit x = a*y + b for the segment.
+            if abs(dy) < 1e-6:
+                continue
+
+            # Fit x = a*y + b.
             a = dx / dy
             b = x1 - a * y1
 
-            if abs(a) > max_abs_dxdy:
+            x_bottom = a * fit_y_bottom + b
+            x_top = a * fit_y_top + b
+
+            if not (-0.25 * bev_w <= x_bottom <= 1.25 * bev_w):
+                continue
+            if not (-0.25 * bev_w <= x_top <= 1.25 * bev_w):
                 continue
 
-            x_bottom = a * y_bottom + b
-            x_top = a * y_top + b
-
-            if x_bottom < 0 or x_bottom >= w:
-                continue
-
-            score = length * (0.5 + 0.5 * max(y1, y2) / max(1.0, h))
-
-            candidate = {
-                "x1": x1,
-                "y1": y1,
-                "x2": x2,
-                "y2": y2,
-                "a": a,
-                "b": b,
-                "x_bottom": x_bottom,
-                "x_top": x_top,
-                "length": length,
-                "angle": angle,
-                "score": score,
-            }
-
-            side = None
-            if x_bottom < mid_x - split_margin:
+            if x_bottom < center_x - min_side_distance_px:
                 side = "left"
-            elif x_bottom > mid_x + split_margin:
+            elif x_bottom > center_x + min_side_distance_px:
                 side = "right"
             else:
                 continue
 
-            if bool(self.get_parameter("enforce_perspective_consistency").value):
-                slope_tolerance = float(self.get_parameter("perspective_slope_tolerance").value)
-
-                # Image coordinates: y grows downward.
-                # A left lane boundary normally has a <= 0 because it converges
-                # toward the image center when moving upward.
-                # A right lane boundary normally has a >= 0.
-                #
-                # The tolerance keeps near-vertical straight lanes valid.
-                if side == "left" and a > slope_tolerance:
-                    continue
-                if side == "right" and a < -slope_tolerance:
-                    continue
-
-            candidate["side"] = side
-
-            if side == "left":
-                left_candidates.append(candidate)
-            else:
-                right_candidates.append(candidate)
-
-        left_candidates = sorted(left_candidates, key=lambda c: c["score"], reverse=True)[:max_segments]
-        right_candidates = sorted(right_candidates, key=lambda c: c["score"], reverse=True)[:max_segments]
-
-        debug["accepted_segments"] = len(left_candidates) + len(right_candidates)
-        debug["left_segments"] = len(left_candidates)
-        debug["right_segments"] = len(right_candidates)
-        debug["total_segment_length"] = round(
-            sum(c["length"] for c in left_candidates + right_candidates),
-            2,
-        )
-        debug["segments"] = left_candidates + right_candidates
-
-        left_fit = self.fit_side_from_segments(left_candidates, "left")
-        right_fit = self.fit_side_from_segments(right_candidates, "right")
-
-        return left_fit, right_fit, debug
-
-    def fit_side_from_segments(self, candidates, side: str):
-        if not candidates:
-            return None
-
-        xs = []
-        ys = []
-
-        for c in candidates:
-            xs.extend([c["x1"], c["x2"]])
-            ys.extend([c["y1"], c["y2"]])
-
-        return self.fit_side_from_points(np.array(xs), np.array(ys), side, len(candidates))
-
-    def fit_side_from_points(self, xs: np.ndarray, ys: np.ndarray, side: str, segment_count: int = 0):
-        min_lane_pixels = int(self.get_parameter("min_lane_pixels").value)
-        min_y_span_px = int(self.get_parameter("min_y_span_px").value)
-        max_abs_dxdy = float(self.get_parameter("max_abs_dxdy").value)
-
-        if segment_count == 0 and len(xs) < min_lane_pixels:
-            return None
-
-        if len(xs) < 2:
-            return None
-
-        if int(np.max(ys) - np.min(ys)) < min_y_span_px:
-            return None
-
-        try:
-            # Fit x = a*y + b.
-            a, b = np.polyfit(ys.astype(np.float32), xs.astype(np.float32), deg=1)
-        except np.linalg.LinAlgError:
-            return None
-
-        if abs(float(a)) > max_abs_dxdy:
-            return None
-
-        return {
-            "side": side,
-            "a": float(a),
-            "b": float(b),
-            "pixels": int(len(xs)),
-            "segments": int(segment_count),
-            "y_min": int(np.min(ys)),
-            "y_max": int(np.max(ys)),
-        }
-
-    def x_at_y(self, fit, y: float, image_width: int) -> float:
-        x = fit["a"] * y + fit["b"]
-        return float(np.clip(x, 0, image_width - 1))
-
-    def compute_status(
-        self,
-        image_width: int,
-        image_height: int,
-        left_fit,
-        right_fit,
-        lane_mask: np.ndarray,
-        fit_debug: dict,
-    ) -> dict:
-        y_top = int(image_height * float(self.get_parameter("fit_top_y_ratio").value))
-        y_bottom = int(image_height * float(self.get_parameter("fit_bottom_y_ratio").value))
-        lane_width_px = float(self.get_parameter("lane_width_px").value)
-
-        left_visible = left_fit is not None
-        right_visible = right_fit is not None
-
-        center_bottom = None
-        center_top = None
-        inferred_side = None
-
-        lane_width_bottom_px = None
-        lane_width_top_px = None
-        lane_width_valid = None
-
-        if left_visible and right_visible:
-            left_bottom = self.x_at_y(left_fit, y_bottom, image_width)
-            right_bottom = self.x_at_y(right_fit, y_bottom, image_width)
-            left_top = self.x_at_y(left_fit, y_top, image_width)
-            right_top = self.x_at_y(right_fit, y_top, image_width)
-
-            lane_width_bottom_px = float(right_bottom - left_bottom)
-            lane_width_top_px = float(right_top - left_top)
-
-            min_lane_width = float(self.get_parameter("min_lane_width_px").value)
-            max_lane_width = float(self.get_parameter("max_lane_width_px").value)
-
-            lane_width_valid = (
-                min_lane_width <= lane_width_bottom_px <= max_lane_width
-                and lane_width_top_px > 0.0
-                and lane_width_top_px <= lane_width_bottom_px * 1.25
-            )
-
-            center_bottom = 0.5 * (left_bottom + right_bottom)
-            center_top = 0.5 * (left_top + right_top)
-
-        elif left_visible:
-            left_bottom = self.x_at_y(left_fit, y_bottom, image_width)
-            left_top = self.x_at_y(left_fit, y_top, image_width)
-
-            center_bottom = left_bottom + 0.5 * lane_width_px
-            center_top = left_top + 0.5 * lane_width_px
-            inferred_side = "right"
-
-        elif right_visible:
-            right_bottom = self.x_at_y(right_fit, y_bottom, image_width)
-            right_top = self.x_at_y(right_fit, y_top, image_width)
-
-            center_bottom = right_bottom - 0.5 * lane_width_px
-            center_top = right_top - 0.5 * lane_width_px
-            inferred_side = "left"
-
-        total_lane_pixels = int(np.count_nonzero(lane_mask))
-
-        if center_bottom is None or center_top is None:
-            self.stable_lane_frames = 0
-            return {
-                "lane_detected": False,
-                "left_lane_visible": False,
-                "right_lane_visible": False,
-                "inferred_side": None,
-                "center_offset_px": None,
-                "heading_error_deg": None,
-                "confidence": 0.0,
-                "lane_pixels": total_lane_pixels,
-                "stable_lane_frames": self.stable_lane_frames,
-                "lane_width_bottom_px": lane_width_bottom_px,
-                "lane_width_top_px": lane_width_top_px,
-                "lane_width_valid": lane_width_valid,
-                "fit_debug": fit_debug,
+            candidate = {
+                "side": side,
+                "a": float(a),
+                "b": float(b),
+                "x_bottom": float(x_bottom),
+                "y_bottom": float(fit_y_bottom),
+                "x_top": float(x_top),
+                "y_top": float(fit_y_top),
+                "length": float(length),
+                "angle_from_vertical_deg": float(angle_from_vertical),
+                "raw": [int(x1), int(y1), int(x2), int(y2)],
             }
 
-        image_center = image_width * 0.5
-        center_offset_px = float(center_bottom - image_center)
+            accepted += 1
+            if side == "left":
+                left.append(candidate)
+            else:
+                right.append(candidate)
 
-        dx = float(center_top - center_bottom)
-        dy = float(y_bottom - y_top)
-        heading_error_deg = float(math.degrees(math.atan2(dx, dy)))
+        def sort_key(c: dict[str, Any]) -> tuple[float, float]:
+            lateral_abs = abs(self.bev_x_to_lateral(float(c["x_bottom"]), bev_w))
+            return (-float(c["length"]), lateral_abs)
 
-        max_output_heading = float(self.get_parameter("max_output_heading_deg").value)
-        if abs(heading_error_deg) > max_output_heading:
-            confidence = 0.0
-            lane_detected = False
-            fit_debug["confidence_caps"] = ["max_output_heading_exceeded"]
-        else:
-            confidence = self.compute_confidence(
-                image_width=image_width,
-                left_visible=left_visible,
-                right_visible=right_visible,
-                center_offset_px=center_offset_px,
-                heading_error_deg=heading_error_deg,
-                fit_debug=fit_debug,
-                total_lane_pixels=total_lane_pixels,
-                lane_width_valid=lane_width_valid,
-            )
-            lane_detected = confidence > 0.10
+        left = sorted(left, key=sort_key)[:max_per_side]
+        right = sorted(right, key=sort_key)[:max_per_side]
 
-        center_offset_px, heading_error_deg, confidence = self.apply_temporal_smoothing(
-            center_offset_px,
-            heading_error_deg,
-            confidence,
+        debug = {
+            "raw_bev_hough_segments": int(raw_count),
+            "accepted_bev_segments": int(accepted),
+            "candidate_count_left": int(len(left)),
+            "candidate_count_right": int(len(right)),
+        }
+
+        return left, right, debug
+
+    def score_pair(self, left: dict[str, Any], right: dict[str, Any], bev_w: int, bev_h: int) -> dict[str, Any]:
+        lb = float(left["x_bottom"])
+        rb = float(right["x_bottom"])
+        lt = float(left["x_top"])
+        rt = float(right["x_top"])
+
+        left_lat_b = self.bev_x_to_lateral(lb, bev_w)
+        right_lat_b = self.bev_x_to_lateral(rb, bev_w)
+        left_lat_t = self.bev_x_to_lateral(lt, bev_w)
+        right_lat_t = self.bev_x_to_lateral(rt, bev_w)
+
+        width_bottom = right_lat_b - left_lat_b
+        width_top = right_lat_t - left_lat_t
+
+        center_bottom = 0.5 * (left_lat_b + right_lat_b)
+        center_top = 0.5 * (left_lat_t + right_lat_t)
+
+        expected_width = float(self.p("expected_lane_width_m"))
+        min_width = float(self.p("min_lane_width_m"))
+        max_width = float(self.p("max_lane_width_m"))
+
+        width_valid = (
+            min_width <= width_bottom <= max_width
+            and min_width * 0.6 <= width_top <= max_width * 1.25
         )
 
-        if confidence > 0.10:
-            self.prev_center_offset_px = center_offset_px
-            self.prev_heading_error_deg = heading_error_deg
-        else:
-            lane_detected = False
+        center_score = score_from_error(
+            center_bottom,
+            float(self.p("pair_center_full_error_m")),
+            floor=0.0,
+        )
+
+        width_score = score_from_error(
+            width_bottom - expected_width,
+            float(self.p("pair_width_full_error_m")),
+            floor=0.0,
+        )
+        if not width_valid:
+            width_score *= 0.25
+
+        width_consistency = score_from_error(
+            width_top - width_bottom,
+            float(self.p("pair_width_full_error_m")),
+            floor=0.0,
+        )
+
+        parallel_score = score_from_error(
+            float(left["a"]) - float(right["a"]),
+            float(self.p("pair_parallel_full_error")),
+            floor=0.0,
+        )
+
+        forward_bottom = self.bev_y_to_forward(float(left["y_bottom"]), bev_h)
+        forward_top = self.bev_y_to_forward(float(left["y_top"]), bev_h)
+        df = max(1e-3, forward_top - forward_bottom)
+        heading_deg = math.degrees(math.atan2(center_top - center_bottom, df))
+        heading_score = score_from_error(
+            heading_deg,
+            float(self.p("pair_heading_full_error_deg")),
+            floor=0.0,
+        )
+
+        side_score = 1.0 if left_lat_b < 0.0 < right_lat_b else 0.25
+
+        evidence_score = clamp(
+            (float(left["length"]) + float(right["length"])) / max(1.0, 0.8 * bev_h),
+            0.0,
+            1.0,
+        )
+
+        temporal_score = 1.0
+        if self.prev_offset_px is not None and self.prev_heading_deg is not None:
+            # Convert center lateral error to approximate image-px using old broad image scale.
+            approximate_offset_px = center_bottom / max(1e-3, float(self.p("bev_width_m"))) * 800.0
+            temporal_offset_score = score_from_error(
+                approximate_offset_px - self.prev_offset_px,
+                float(self.p("max_offset_jump_px")),
+                floor=0.0,
+            )
+            temporal_heading_score = score_from_error(
+                heading_deg - self.prev_heading_deg,
+                float(self.p("max_heading_jump_deg")),
+                floor=0.0,
+            )
+            temporal_score = 0.55 * temporal_offset_score + 0.45 * temporal_heading_score
+
+        pair_score = (
+            0.24 * center_score
+            + 0.22 * width_score
+            + 0.14 * width_consistency
+            + 0.14 * parallel_score
+            + 0.10 * heading_score
+            + 0.08 * side_score
+            + 0.06 * evidence_score
+            + 0.02 * temporal_score
+        )
 
         return {
-            "lane_detected": lane_detected,
-            "left_lane_visible": left_visible,
-            "right_lane_visible": right_visible,
-            "inferred_side": inferred_side,
-            "center_offset_px": round(center_offset_px, 2),
-            "heading_error_deg": round(heading_error_deg, 2),
-            "confidence": round(float(confidence), 3),
-            "lane_pixels": total_lane_pixels,
-            "stable_lane_frames": self.stable_lane_frames,
-            "lane_width_bottom_px": None if lane_width_bottom_px is None else round(lane_width_bottom_px, 2),
-            "lane_width_top_px": None if lane_width_top_px is None else round(lane_width_top_px, 2),
-            "lane_width_valid": lane_width_valid,
-            "fit_debug": fit_debug,
+            "left": left,
+            "right": right,
+            "score": float(clamp(pair_score, 0.0, 1.0)),
+            "center_bottom_m": float(center_bottom),
+            "center_top_m": float(center_top),
+            "heading_error_deg": float(heading_deg),
+            "width_bottom_m": float(width_bottom),
+            "width_top_m": float(width_top),
+            "width_valid": bool(width_valid),
+            "components": {
+                "center_score": round(float(center_score), 3),
+                "width_score": round(float(width_score), 3),
+                "width_consistency": round(float(width_consistency), 3),
+                "parallel_score": round(float(parallel_score), 3),
+                "heading_score": round(float(heading_score), 3),
+                "side_score": round(float(side_score), 3),
+                "evidence_score": round(float(evidence_score), 3),
+                "temporal_score": round(float(temporal_score), 3),
+            },
         }
 
-    def compute_confidence(
+    def select_pair(
         self,
-        image_width: int,
-        left_visible: bool,
-        right_visible: bool,
-        center_offset_px: float,
-        heading_error_deg: float,
-        fit_debug: dict,
-        total_lane_pixels: int,
-        lane_width_valid,
+        left_candidates: list[dict[str, Any]],
+        right_candidates: list[dict[str, Any]],
+        bev_w: int,
+        bev_h: int,
+    ) -> tuple[Optional[dict[str, Any]], list[dict[str, Any]]]:
+        pairs = []
+        for left in left_candidates:
+            for right in right_candidates:
+                pairs.append(self.score_pair(left, right, bev_w, bev_h))
+
+        pairs = sorted(pairs, key=lambda p: float(p["score"]), reverse=True)
+
+        if not pairs:
+            return None, pairs
+
+        best = pairs[0]
+        if float(best["score"]) < float(self.p("min_pair_score")):
+            return None, pairs
+
+        return best, pairs
+
+    def select_single_side(
+        self,
+        left_candidates: list[dict[str, Any]],
+        right_candidates: list[dict[str, Any]],
+        bev_w: int,
+    ) -> tuple[Optional[dict[str, Any]], Optional[dict[str, Any]], Optional[str], float]:
+        expected_width_px = float(self.p("expected_lane_width_m")) / float(self.p("bev_resolution"))
+        center_x = bev_w * 0.5
+
+        best_left = None
+        best_right = None
+        best_score = 0.0
+        source = None
+
+        for cand in left_candidates:
+            inferred_right = dict(cand)
+            inferred_right["side"] = "right"
+            inferred_right["x_bottom"] = float(cand["x_bottom"]) + expected_width_px
+            inferred_right["x_top"] = float(cand["x_top"]) + expected_width_px
+
+            center_bottom = 0.5 * (float(cand["x_bottom"]) + float(inferred_right["x_bottom"]))
+            score = score_from_error(center_bottom - center_x, 0.35 * bev_w, floor=0.0)
+            score = 0.65 * score + 0.35 * clamp(float(cand["length"]) / 180.0, 0.0, 1.0)
+
+            if score > best_score:
+                best_score = score
+                best_left = cand
+                best_right = inferred_right
+                source = "left_only_inferred_right"
+
+        for cand in right_candidates:
+            inferred_left = dict(cand)
+            inferred_left["side"] = "left"
+            inferred_left["x_bottom"] = float(cand["x_bottom"]) - expected_width_px
+            inferred_left["x_top"] = float(cand["x_top"]) - expected_width_px
+
+            center_bottom = 0.5 * (float(cand["x_bottom"]) + float(inferred_left["x_bottom"]))
+            score = score_from_error(center_bottom - center_x, 0.35 * bev_w, floor=0.0)
+            score = 0.65 * score + 0.35 * clamp(float(cand["length"]) / 180.0, 0.0, 1.0)
+
+            if score > best_score:
+                best_score = score
+                best_left = inferred_left
+                best_right = cand
+                source = "right_only_inferred_left"
+
+        return best_left, best_right, source, float(best_score)
+
+    def bev_line_to_image_endpoint(
+        self,
+        line: dict[str, Any],
+        h_inv: np.ndarray,
+    ) -> dict[str, float]:
+        image_line = self.ipm.bev_line_to_image_line(
+            {
+                "x_bottom": float(line["x_bottom"]),
+                "y_bottom": float(line["y_bottom"]),
+                "x_top": float(line["x_top"]),
+                "y_top": float(line["y_top"]),
+            },
+            h_inv,
+        )
+
+        return {
+            "x_bottom": round(float(image_line["x_bottom"]), 2),
+            "y_bottom": round(float(image_line["y_bottom"]), 2),
+            "x_top": round(float(image_line["x_top"]), 2),
+            "y_top": round(float(image_line["y_top"]), 2),
+        }
+
+    def bev_line_to_metric_endpoint(
+        self,
+        line: dict[str, Any],
+        bev_w: int,
+        bev_h: int,
+    ) -> dict[str, float]:
+        metric_line = self.ipm.bev_line_to_metric_line(
+            {
+                "x_bottom": float(line["x_bottom"]),
+                "y_bottom": float(line["y_bottom"]),
+                "x_top": float(line["x_top"]),
+                "y_top": float(line["y_top"]),
+            }
+        )
+
+        return {
+            "forward_bottom_m": round(float(metric_line["forward_bottom_m"]), 3),
+            "lateral_bottom_m": round(float(metric_line["lateral_bottom_m"]), 3),
+            "forward_top_m": round(float(metric_line["forward_top_m"]), 3),
+            "lateral_top_m": round(float(metric_line["lateral_top_m"]), 3),
+        }
+
+    def make_center_line(self, left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "x_bottom": 0.5 * (float(left["x_bottom"]) + float(right["x_bottom"])),
+            "y_bottom": 0.5 * (float(left["y_bottom"]) + float(right["y_bottom"])),
+            "x_top": 0.5 * (float(left["x_top"]) + float(right["x_top"])),
+            "y_top": 0.5 * (float(left["y_top"]) + float(right["y_top"])),
+        }
+
+    def compute_image_offset_px(
+        self,
+        center_line: dict[str, Any],
+        h_inv: np.ndarray,
+        image_w: int,
     ) -> float:
-        confidence_caps = []
+        center_img = self.bev_line_to_image_endpoint(center_line, h_inv)
+        return float(center_img["x_bottom"]) - image_w * 0.5
 
-        if fit_debug.get("fit_method") == "hough":
-            total_length = float(fit_debug.get("total_segment_length", 0.0))
-            accepted_segments = int(fit_debug.get("accepted_segments", 0))
-
-            length_score = min(1.0, total_length / 220.0)
-            segment_score = min(1.0, accepted_segments / 4.0)
-            evidence_score = 0.65 * length_score + 0.35 * segment_score
-        else:
-            evidence_score = min(1.0, total_lane_pixels / 400.0)
-
-        if left_visible and right_visible:
-            visibility_score = 1.0
-        else:
-            visibility_score = 0.55
-            confidence_caps.append("single_side_detection")
-
-        max_conf_heading = float(self.get_parameter("max_confident_heading_deg").value)
-        max_output_heading = float(self.get_parameter("max_output_heading_deg").value)
-        abs_heading = abs(heading_error_deg)
-
-        if abs_heading <= max_conf_heading:
-            heading_score = 1.0
-        else:
-            heading_score = max(
-                0.0,
-                1.0 - (abs_heading - max_conf_heading) / max(1.0, max_output_heading - max_conf_heading),
-            )
-
-        max_conf_offset = float(self.get_parameter("max_confident_offset_ratio").value) * image_width
-        abs_offset = abs(center_offset_px)
-
-        if abs_offset <= max_conf_offset:
-            offset_score = 1.0
-        else:
-            offset_score = max(0.25, 1.0 - (abs_offset - max_conf_offset) / max(1.0, image_width * 0.25))
-
-        confidence = visibility_score * evidence_score * heading_score * offset_score
-
-        if not (left_visible and right_visible):
-            cap = float(self.get_parameter("single_side_confidence_cap").value)
-            confidence = min(confidence, cap)
-
-        if lane_width_valid is False:
-            cap = float(self.get_parameter("invalid_width_confidence_cap").value)
-            confidence = min(confidence, cap)
-            confidence_caps.append("invalid_lane_width")
-
-        fit_debug["confidence_components"] = {
-            "evidence_score": round(float(evidence_score), 3),
-            "visibility_score": round(float(visibility_score), 3),
-            "heading_score": round(float(heading_score), 3),
-            "offset_score": round(float(offset_score), 3),
-        }
-        fit_debug["confidence_caps"] = confidence_caps
-
-        return float(np.clip(confidence, 0.0, 1.0))
-
-    def apply_temporal_smoothing(
+    def apply_temporal_confidence(
         self,
-        center_offset_px: float,
-        heading_error_deg: float,
+        offset_px: float,
+        heading_deg: float,
         confidence: float,
-    ):
-        if self.prev_center_offset_px is None or self.prev_heading_error_deg is None:
-            self.stable_lane_frames = 1 if confidence > 0.10 else 0
-
-            min_stable_frames = int(self.get_parameter("min_stable_frames").value)
-            if self.stable_lane_frames < min_stable_frames:
-                confidence = min(
-                    confidence,
-                    float(self.get_parameter("temporal_confidence_cap").value),
-                )
-
-            return center_offset_px, heading_error_deg, confidence
-
-        offset_jump = abs(center_offset_px - self.prev_center_offset_px)
-        heading_jump = abs(heading_error_deg - self.prev_heading_error_deg)
-
-        max_offset_jump = float(self.get_parameter("max_offset_jump_px").value)
-        max_heading_jump = float(self.get_parameter("max_heading_jump_deg").value)
-
-        if offset_jump > max_offset_jump or heading_jump > max_heading_jump:
-            self.stable_lane_frames = 1
-            confidence *= 0.45
+    ) -> float:
+        if self.prev_offset_px is None or self.prev_heading_deg is None:
+            self.stable_frames = 1
         else:
-            self.stable_lane_frames += 1
+            offset_jump = abs(offset_px - self.prev_offset_px)
+            heading_jump = abs(heading_deg - self.prev_heading_deg)
 
-        min_stable_frames = int(self.get_parameter("min_stable_frames").value)
-        if self.stable_lane_frames < min_stable_frames:
-            confidence = min(
-                confidence,
-                float(self.get_parameter("temporal_confidence_cap").value),
+            if (
+                offset_jump > float(self.p("max_offset_jump_px"))
+                or heading_jump > float(self.p("max_heading_jump_deg"))
+            ):
+                self.stable_frames = 1
+                confidence *= 0.55
+            else:
+                self.stable_frames += 1
+
+        if self.stable_frames < int(self.p("min_stable_frames")):
+            confidence = min(confidence, float(self.p("temporal_confidence_cap")))
+
+        return float(clamp(confidence, 0.0, 1.0))
+
+    def process_frame(self, bgr: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+        image_h, image_w = bgr.shape[:2]
+
+        lane_mask, mask_debug = self.detect_lane_mask(bgr)
+
+        h_mat, h_inv, bev_w, bev_h = self.build_bev_homography(image_w, image_h)
+        bev_mask = self.warp_to_bev(lane_mask, h_mat, bev_w, bev_h)
+
+        left_candidates, right_candidates, candidate_debug = self.extract_bev_candidates(bev_mask)
+        best_pair, all_pairs = self.select_pair(left_candidates, right_candidates, bev_w, bev_h)
+
+        selected_left = None
+        selected_right = None
+        selection_source = None
+        pair_score = 0.0
+        pair_components: dict[str, float] = {}
+        width_bottom_m = None
+        width_top_m = None
+        width_valid = None
+        single_side_score = 0.0
+
+        if best_pair is not None:
+            selected_left = best_pair["left"]
+            selected_right = best_pair["right"]
+            selection_source = "bev_pair"
+            pair_score = float(best_pair["score"])
+            pair_components = best_pair["components"]
+            width_bottom_m = float(best_pair["width_bottom_m"])
+            width_top_m = float(best_pair["width_top_m"])
+            width_valid = bool(best_pair["width_valid"])
+        else:
+            selected_left, selected_right, selection_source, single_side_score = self.select_single_side(
+                left_candidates,
+                right_candidates,
+                bev_w,
             )
 
-        alpha = float(self.get_parameter("smoothing_alpha").value)
-        alpha = float(np.clip(alpha, 0.0, 1.0))
+        lane_detected = selected_left is not None and selected_right is not None
 
-        smoothed_offset = alpha * center_offset_px + (1.0 - alpha) * self.prev_center_offset_px
-        smoothed_heading = alpha * heading_error_deg + (1.0 - alpha) * self.prev_heading_error_deg
+        if not lane_detected:
+            self.stable_frames = 0
+            status = {
+                "version": "LDv4_bev",
+                "lane_detected": False,
+                "image_width": int(image_w),
+                "image_height": int(image_h),
+                "confidence": 0.0,
+                "center_offset_px": None,
+                "heading_error_deg": None,
+                "left_lane_visible": False,
+                "right_lane_visible": False,
+                "selected_left": None,
+                "selected_right": None,
+                "bev_left": None,
+                "bev_right": None,
+                "bev_center": None,
+                "selection_source": None,
+                "selected_pair_score": 0.0,
+                "single_side_score": 0.0,
+                "lane_width_bottom_m": None,
+                "lane_width_top_m": None,
+                "lane_width_valid": None,
+                "stable_lane_frames": 0,
+                "candidate_pair_count": int(len(all_pairs)),
+                "candidate_count_left": int(len(left_candidates)),
+                "candidate_count_right": int(len(right_candidates)),
+                "mask_debug": mask_debug,
+                "fit_debug": candidate_debug,
+                "confidence_components": {},
+                "confidence_caps": ["no_valid_bev_lane_geometry"],
+            }
 
-        return smoothed_offset, smoothed_heading, confidence
+            overlay = self.draw_overlay(
+                bgr,
+                lane_mask,
+                h_inv,
+                left_candidates,
+                right_candidates,
+                None,
+                None,
+                status,
+            )
+            bev_debug = self.render_bev_debug(
+                bev_mask,
+                left_candidates,
+                right_candidates,
+                None,
+                None,
+                status,
+            )
+            return lane_mask, overlay, bev_debug, status
 
-    def publish_mask(self, input_msg: CompressedImage, lane_mask: np.ndarray) -> None:
-        ok, encoded = cv2.imencode(".png", lane_mask)
-        if not ok:
-            self.get_logger().warning("Failed to encode lane mask")
-            return
+        center_line = self.make_center_line(selected_left, selected_right)
 
-        out = CompressedImage()
-        out.header = input_msg.header
-        out.format = "png"
-        out.data = encoded.tobytes()
-        self.lane_mask_pub.publish(out)
+        center_offset_px = self.compute_image_offset_px(center_line, h_inv, image_w)
 
-    def publish_overlay(
+        center_bottom_lat = self.bev_x_to_lateral(float(center_line["x_bottom"]), bev_w)
+        center_top_lat = self.bev_x_to_lateral(float(center_line["x_top"]), bev_w)
+        center_bottom_fwd = self.bev_y_to_forward(float(center_line["y_bottom"]), bev_h)
+        center_top_fwd = self.bev_y_to_forward(float(center_line["y_top"]), bev_h)
+
+        heading_error_deg = math.degrees(
+            math.atan2(
+                center_top_lat - center_bottom_lat,
+                max(1e-3, center_top_fwd - center_bottom_fwd),
+            )
+        )
+
+        if best_pair is not None:
+            confidence = 0.82 * pair_score + 0.18 * clamp(np.count_nonzero(bev_mask) / 900.0, 0.0, 1.0)
+            if width_valid is False:
+                confidence = min(confidence, float(self.p("invalid_width_confidence_cap")))
+        else:
+            confidence = min(float(self.p("single_side_confidence_cap")), single_side_score)
+
+        max_heading = float(self.p("max_output_heading_deg"))
+        if abs(heading_error_deg) > max_heading:
+            confidence = 0.0
+            caps = ["max_output_heading_exceeded"]
+        else:
+            caps = []
+
+        confidence = self.apply_temporal_confidence(center_offset_px, heading_error_deg, confidence)
+
+        alpha = clamp(float(self.p("smoothing_alpha")), 0.0, 1.0)
+        if self.prev_offset_px is not None and self.prev_heading_deg is not None and confidence > 0.0:
+            smoothed_offset = alpha * center_offset_px + (1.0 - alpha) * self.prev_offset_px
+            smoothed_heading = alpha * heading_error_deg + (1.0 - alpha) * self.prev_heading_deg
+        else:
+            smoothed_offset = center_offset_px
+            smoothed_heading = heading_error_deg
+
+        if confidence > 0.0:
+            self.prev_offset_px = float(smoothed_offset)
+            self.prev_heading_deg = float(smoothed_heading)
+
+        status = {
+            "version": "LDv4_bev",
+            "lane_detected": bool(confidence > 0.10),
+            "image_width": int(image_w),
+            "image_height": int(image_h),
+            "confidence": round(float(confidence), 3),
+            "center_offset_px": round(float(smoothed_offset), 2),
+            "heading_error_deg": round(float(smoothed_heading), 2),
+            "left_lane_visible": selection_source != "right_only_inferred_left",
+            "right_lane_visible": selection_source != "left_only_inferred_right",
+            "selected_left": self.bev_line_to_image_endpoint(selected_left, h_inv),
+            "selected_right": self.bev_line_to_image_endpoint(selected_right, h_inv),
+            "bev_left": self.bev_line_to_metric_endpoint(selected_left, bev_w, bev_h),
+            "bev_right": self.bev_line_to_metric_endpoint(selected_right, bev_w, bev_h),
+            "bev_center": self.bev_line_to_metric_endpoint(center_line, bev_w, bev_h),
+            "selection_source": selection_source,
+            "selected_pair_score": round(float(pair_score), 3),
+            "single_side_score": round(float(single_side_score), 3),
+            "lane_width_bottom_m": None if width_bottom_m is None else round(float(width_bottom_m), 3),
+            "lane_width_top_m": None if width_top_m is None else round(float(width_top_m), 3),
+            "lane_width_valid": width_valid,
+            "stable_lane_frames": int(self.stable_frames),
+            "candidate_pair_count": int(len(all_pairs)),
+            "candidate_count_left": int(len(left_candidates)),
+            "candidate_count_right": int(len(right_candidates)),
+            "mask_debug": mask_debug,
+            "fit_debug": candidate_debug,
+            "confidence_components": pair_components,
+            "confidence_caps": caps,
+        }
+
+        overlay = self.draw_overlay(
+            bgr,
+            lane_mask,
+            h_inv,
+            left_candidates,
+            right_candidates,
+            selected_left,
+            selected_right,
+            status,
+        )
+        bev_debug = self.render_bev_debug(
+            bev_mask,
+            left_candidates,
+            right_candidates,
+            selected_left,
+            selected_right,
+            status,
+        )
+
+        return lane_mask, overlay, bev_debug, status
+
+    def draw_image_line_from_bev(
         self,
-        input_msg: CompressedImage,
+        image: np.ndarray,
+        line: dict[str, Any],
+        h_inv: np.ndarray,
+        color: tuple[int, int, int],
+        thickness: int,
+    ) -> None:
+        ep = self.bev_line_to_image_endpoint(line, h_inv)
+        p0 = (int(round(ep["x_bottom"])), int(round(ep["y_bottom"])))
+        p1 = (int(round(ep["x_top"])), int(round(ep["y_top"])))
+        cv2.line(image, p0, p1, color, thickness, cv2.LINE_AA)
+
+    def draw_overlay(
+        self,
         bgr: np.ndarray,
         lane_mask: np.ndarray,
-        left_fit,
-        right_fit,
-        status: dict,
-        fit_debug: dict,
-    ) -> None:
-        if not bool(self.get_parameter("publish_debug_overlay").value):
-            return
-
+        h_inv: np.ndarray,
+        left_candidates: list[dict[str, Any]],
+        right_candidates: list[dict[str, Any]],
+        selected_left: Optional[dict[str, Any]],
+        selected_right: Optional[dict[str, Any]],
+        status: dict[str, Any],
+    ) -> np.ndarray:
         overlay = bgr.copy()
-        h, w = overlay.shape[:2]
 
-        color_layer = np.zeros_like(overlay)
-        color_layer[lane_mask > 0] = (0, 255, 255)
-        overlay = cv2.addWeighted(overlay, 1.0, color_layer, 0.45, 0.0)
+        mask_pixels = lane_mask > 0
+        if np.any(mask_pixels):
+            yellow = overlay.copy()
+            yellow[mask_pixels] = (0, 255, 255)
+            overlay = cv2.addWeighted(overlay, 0.75, yellow, 0.25, 0.0)
 
-        # Draw accepted Hough segments in cyan.
-        for segment in fit_debug.get("segments", []):
-            cv2.line(
-                overlay,
-                (int(segment["x1"]), int(segment["y1"])),
-                (int(segment["x2"]), int(segment["y2"])),
-                (255, 255, 0),
-                2,
-            )
+        # Draw candidates lightly.
+        if bool(self.p("draw_all_bev_candidates")):
+            for cand in left_candidates:
+                self.draw_image_line_from_bev(overlay, cand, h_inv, (255, 255, 0), 1)
+            for cand in right_candidates:
+                self.draw_image_line_from_bev(overlay, cand, h_inv, (255, 255, 0), 1)
 
-        y_top = int(h * float(self.get_parameter("fit_top_y_ratio").value))
-        y_bottom = int(h * float(self.get_parameter("fit_bottom_y_ratio").value))
+        # Selected lanes.
+        if selected_left is not None:
+            self.draw_image_line_from_bev(overlay, selected_left, h_inv, (255, 0, 0), 4)
+        if selected_right is not None:
+            self.draw_image_line_from_bev(overlay, selected_right, h_inv, (0, 0, 255), 4)
 
-        if left_fit is not None:
-            self.draw_fit(overlay, left_fit, y_top, y_bottom, w, (255, 0, 0))
-
-        if right_fit is not None:
-            self.draw_fit(overlay, right_fit, y_top, y_bottom, w, (0, 0, 255))
-
-        if status.get("lane_detected"):
-            image_center = w * 0.5
-            center_bottom = image_center + float(status["center_offset_px"])
-
-            heading = math.radians(float(status["heading_error_deg"]))
-            dy = float(y_bottom - y_top)
-            center_top = center_bottom + math.tan(heading) * dy
-
-            cv2.line(
-                overlay,
-                (int(center_bottom), y_bottom),
-                (int(center_top), y_top),
-                (0, 255, 0),
-                3,
-            )
-
-            cv2.circle(overlay, (int(image_center), y_bottom), 6, (255, 255, 255), -1)
-            cv2.circle(overlay, (int(center_bottom), y_bottom), 6, (0, 255, 0), -1)
+        if selected_left is not None and selected_right is not None:
+            center = self.make_center_line(selected_left, selected_right)
+            self.draw_image_line_from_bev(overlay, center, h_inv, (0, 255, 0), 4)
 
         text = (
             f"offset={status.get('center_offset_px')} px | "
             f"heading={status.get('heading_error_deg')} deg | "
             f"conf={status.get('confidence')} | "
-            f"seg={fit_debug.get('accepted_segments', 0)}"
+            f"L={status.get('candidate_count_left', 0)} "
+            f"R={status.get('candidate_count_right', 0)}"
         )
-
         cv2.putText(
             overlay,
             text,
-            (20, 35),
+            (12, 32),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.75,
             (255, 255, 255),
@@ -999,46 +1208,88 @@ class LaneDetectionNode(Node):
             cv2.LINE_AA,
         )
 
-        ok, encoded = cv2.imencode(".jpg", overlay, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
-        if not ok:
-            self.get_logger().warning("Failed to encode lane overlay")
-            return
+        return overlay
 
-        out = CompressedImage()
-        out.header = input_msg.header
-        out.format = "jpeg"
-        out.data = encoded.tobytes()
-        self.lane_overlay_pub.publish(out)
-
-    def draw_fit(
+    def render_bev_debug(
         self,
-        image: np.ndarray,
-        fit,
-        y_top: int,
-        y_bottom: int,
-        image_width: int,
-        color: Tuple[int, int, int],
-    ) -> None:
-        x_top = self.x_at_y(fit, y_top, image_width)
-        x_bottom = self.x_at_y(fit, y_bottom, image_width)
+        bev_mask: np.ndarray,
+        left_candidates: list[dict[str, Any]],
+        right_candidates: list[dict[str, Any]],
+        selected_left: Optional[dict[str, Any]],
+        selected_right: Optional[dict[str, Any]],
+        status: dict[str, Any],
+    ) -> np.ndarray:
+        bev_h, bev_w = bev_mask.shape[:2]
 
-        cv2.line(
-            image,
-            (int(x_bottom), int(y_bottom)),
-            (int(x_top), int(y_top)),
-            color,
-            3,
+        debug = np.zeros((bev_h, bev_w, 3), dtype=np.uint8)
+        debug[:, :] = (20, 20, 20)
+        debug[bev_mask > 0] = (90, 90, 90)
+
+        def draw_bev_line(line: dict[str, Any], color: tuple[int, int, int], thickness: int) -> None:
+            p0 = (int(round(line["x_bottom"])), int(round(line["y_bottom"])))
+            p1 = (int(round(line["x_top"])), int(round(line["y_top"])))
+            cv2.line(debug, p0, p1, color, thickness, cv2.LINE_AA)
+
+        if bool(self.p("draw_all_bev_candidates")):
+            for cand in left_candidates:
+                draw_bev_line(cand, (255, 255, 0), 1)
+            for cand in right_candidates:
+                draw_bev_line(cand, (255, 255, 0), 1)
+
+        if selected_left is not None:
+            draw_bev_line(selected_left, (255, 0, 0), 3)
+        if selected_right is not None:
+            draw_bev_line(selected_right, (0, 0, 255), 3)
+
+        if selected_left is not None and selected_right is not None:
+            center = self.make_center_line(selected_left, selected_right)
+            draw_bev_line(center, (0, 255, 0), 3)
+
+        # Ego marker at bottom center.
+        ego = (int(bev_w * 0.5), bev_h - 1)
+        cv2.circle(debug, ego, 4, (0, 255, 255), -1)
+        cv2.arrowedLine(
+            debug,
+            (ego[0], ego[1]),
+            (ego[0], max(0, ego[1] - 35)),
+            (0, 255, 255),
+            2,
+            cv2.LINE_AA,
+            tipLength=0.3,
         )
 
+        text = (
+            f"LDv4 BEV | conf={status.get('confidence')} | "
+            f"src={status.get('selection_source')} | "
+            f"L={len(left_candidates)} R={len(right_candidates)}"
+        )
+        cv2.putText(
+            debug,
+            text,
+            (8, 22),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
 
-def main(args=None):
+        # Make it readable in Foxglove.
+        scale = 3
+        debug = cv2.resize(
+            debug,
+            (bev_w * scale, bev_h * scale),
+            interpolation=cv2.INTER_NEAREST,
+        )
+
+        return debug
+
+
+def main(args=None) -> None:
     rclpy.init(args=args)
     node = LaneDetectionNode()
-
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
     finally:
         node.destroy_node()
         rclpy.shutdown()
