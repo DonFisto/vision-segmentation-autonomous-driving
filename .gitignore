@@ -36,3 +36,4 @@ ros/**/log/
 .DS_Store
 Thumbs.db
 ros/ros2_ws/src/vision_msgs/
+data/carla_lane_dataset/
