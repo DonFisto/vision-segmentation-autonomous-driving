@@ -1,6 +1,6 @@
 # Documentation
 
-This index covers setup, operation, project history, and the technical milestones behind the current perception and local-mapping stack.
+This index covers setup, operation, project history, the technical milestones behind the current perception and local-mapping stack, and the Codex project-review framework.
 
 ## Start Here
 
@@ -8,6 +8,7 @@ This index covers setup, operation, project history, and the technical milestone
 - [Setup notes](setup.md) - environment dependencies and ROS2 workspace preparation.
 - [ROS2 and CARLA runbook](ros/runbook.md) - node startup, topic checks, recording, and troubleshooting.
 - [Project timeline](timeline.md) - chronological development history.
+- [Codex review framework](agent/README.md) - persistent project context, architecture state, roadmap, decision and learning logs, and structured review prompts.
 
 ## Technical Milestones
 
@@ -29,5 +30,6 @@ The milestone documents are implementation records. Read them in this order to f
 | `ros/runbook.md` | Operational ROS2 workflow |
 | `timeline.md` | Historical progression of the project |
 | `milestones/` | Detailed design decisions, validation notes, limitations, and follow-up work |
+| `agent/` | Codex reviewer instructions, project state, architecture, roadmap, decisions, learning record, and dated reports |
 
-The milestone pages capture the state of the project when each stage was completed. Later documents may supersede limitations or next steps described in earlier milestones.
+The milestone pages capture the state of the project when each stage was completed. Later documents may supersede limitations or next steps described in earlier milestones. Agent state files describe the latest reviewed state and should remain grounded in repository evidence.
