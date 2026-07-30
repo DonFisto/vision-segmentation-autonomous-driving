@@ -84,8 +84,7 @@ class LaneDatasetRecorder(Node):
         # --------------------------------------------------------------
         self.declare_parameter(
             "output_dir",
-            "~/vision-segmentation-autonomous-driving/"
-            "data/carla_lane_dataset",
+            "/home/danielmartinez/datasets/carla_lane_dataset",
         )
         self.declare_parameter("run_name", "")
 
@@ -95,6 +94,9 @@ class LaneDatasetRecorder(Node):
 
         # 0 means unlimited.
         self.declare_parameter("max_samples", 5000)
+
+        # Print collection progress after this many successfully saved samples.
+        self.declare_parameter("progress_every_samples", 100)
 
         self.declare_parameter("rgb_jpeg_quality", 95)
         self.declare_parameter("save_full_semantic_labels", True)
@@ -161,6 +163,9 @@ class LaneDatasetRecorder(Node):
         self.dropped_samples = 0
         self.timestamp_mismatches = 0
         self.write_errors = 0
+
+        self.collection_started_monotonic = time.monotonic()
+        self.last_progress_reported_sample = 0
 
         self.rgb_sensor: Optional[carla.Sensor] = None
         self.semantic_sensor: Optional[carla.Sensor] = None
@@ -876,6 +881,93 @@ class LaneDatasetRecorder(Node):
             )
 
         self.saved_samples += 1
+        self.log_collection_progress()
+
+    # ==============================================================
+    # Collection progress
+    # ==============================================================
+
+    @staticmethod
+    def format_duration(seconds: float) -> str:
+        seconds = max(0, int(round(seconds)))
+        hours, remainder = divmod(seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+
+        if hours > 0:
+            return f"{hours:d}h {minutes:02d}m {seconds:02d}s"
+
+        if minutes > 0:
+            return f"{minutes:d}m {seconds:02d}s"
+
+        return f"{seconds:d}s"
+
+    def log_collection_progress(self, force: bool = False) -> None:
+        saved = int(self.saved_samples)
+        maximum = int(self.max_samples)
+        report_every = max(
+            1,
+            int(self.p("progress_every_samples")),
+        )
+
+        complete = maximum > 0 and saved >= maximum
+
+        if (
+            not force
+            and not complete
+            and saved - self.last_progress_reported_sample
+            < report_every
+        ):
+            return
+
+        elapsed = max(
+            1e-6,
+            time.monotonic()
+            - self.collection_started_monotonic,
+        )
+        rate = saved / elapsed
+
+        fields = []
+
+        if maximum > 0:
+            percentage = 100.0 * saved / maximum
+            remaining = max(0, maximum - saved)
+            eta_seconds = (
+                remaining / rate
+                if rate > 1e-6
+                else 0.0
+            )
+
+            fields.append(
+                f"{saved}/{maximum} samples "
+                f"({percentage:.1f}%)"
+            )
+            fields.append(
+                f"ETA {self.format_duration(eta_seconds)}"
+            )
+        else:
+            fields.append(f"{saved} samples")
+
+        fields.extend(
+            [
+                f"{rate:.2f} samples/s",
+                f"elapsed {self.format_duration(elapsed)}",
+                f"queue={self.save_queue.qsize()}",
+                f"dropped={self.dropped_samples}",
+                f"errors={self.write_errors}",
+            ]
+        )
+
+        prefix = (
+            "Collection complete"
+            if complete
+            else "Collection progress"
+        )
+
+        self.get_logger().info(
+            prefix + ": " + " | ".join(fields)
+        )
+
+        self.last_progress_reported_sample = saved
 
     # ==============================================================
     # ROS preview and status
