@@ -53,39 +53,75 @@ def convert_one(ids: np.ndarray) -> np.ndarray:
 
 def list_pairs(in_root: Path):
     """
-    Expected nested structure:
+    Expected structure:
       in_root/
         TownXX/
-          WeatherYY/
+          RunOrWeatherName/
             rgb/
-            sem_raw/
-    Yields: (town, weather, rgb_path, sem_path)
+            semantic_labels/   # current lane collector
+            sem_raw/           # older collectors
+
+    RGB and semantic files are paired by filename stem, so pairs such as
+    rgb/000001.jpg and semantic_labels/000001.png are supported.
+
+    Yields:
+        (town, run_name, rgb_path, semantic_path)
     """
     pairs = []
+
     for town_dir in sorted(in_root.iterdir()):
         if not town_dir.is_dir():
             continue
-        # skip legacy flat folders if still present
-        if town_dir.name in {"rgb", "sem_raw"}:
+
+        if town_dir.name in {"rgb", "sem_raw", "semantic_labels"}:
             continue
 
-        for weather_dir in sorted(town_dir.iterdir()):
-            if not weather_dir.is_dir():
+        for run_dir in sorted(town_dir.iterdir()):
+            if not run_dir.is_dir():
                 continue
 
-            rgb_dir = weather_dir / "rgb"
-            sem_dir = weather_dir / "sem_raw"
-            if not rgb_dir.is_dir() or not sem_dir.is_dir():
+            rgb_dir = run_dir / "rgb"
+
+            semantic_candidates = [
+                run_dir / "semantic_labels",
+                run_dir / "sem_raw",
+            ]
+
+            sem_dir = next(
+                (candidate for candidate in semantic_candidates
+                 if candidate.is_dir()),
+                None,
+            )
+
+            if not rgb_dir.is_dir() or sem_dir is None:
                 continue
 
             rgb_files = sorted(
-                [p for p in rgb_dir.iterdir() if p.is_file() and p.suffix.lower() in VALID_EXTS]
+                path
+                for path in rgb_dir.iterdir()
+                if path.is_file()
+                and path.suffix.lower() in VALID_EXTS
             )
 
+            semantic_by_stem = {
+                path.stem: path
+                for path in sem_dir.iterdir()
+                if path.is_file()
+                and path.suffix.lower() in VALID_EXTS
+            }
+
             for rgb_path in rgb_files:
-                sem_path = sem_dir / rgb_path.name
-                if sem_path.is_file():
-                    pairs.append((town_dir.name, weather_dir.name, rgb_path, sem_path))
+                sem_path = semantic_by_stem.get(rgb_path.stem)
+                if sem_path is not None:
+                    pairs.append(
+                        (
+                            town_dir.name,
+                            run_dir.name,
+                            rgb_path,
+                            sem_path,
+                        )
+                    )
+
     return pairs
 
 
@@ -141,8 +177,8 @@ def main():
         if args.copy_mode == "copy":
             out_name = f"{town}__{weather}__{rgb_path.stem}.png"
         else:
-            # keep original name; safe as long as file names are globally unique or you run per-town
-            out_name = rgb_path.name
+            # Always use PNG so semantic labels are never written as lossy JPEG.
+            out_name = f"{rgb_path.stem}.png"
 
         img_out = out_root / "images" / split / out_name
         lbl_out = out_root / "labels" / split / out_name

@@ -45,8 +45,16 @@ def process_train_split(in_root: Path, out_root: Path, img_diff_thresh: float, s
 
     prev_img = None
     prev_lbl = None
+    prev_sequence = None
 
     for name in files:
+        parts = name.split("__", 2)
+        sequence = tuple(parts[:2]) if len(parts) >= 3 else None
+
+        if sequence != prev_sequence:
+            prev_img = None
+            prev_lbl = None
+            prev_sequence = sequence
         img_path = img_dir / name
         lbl_path = lbl_dir / name
 
