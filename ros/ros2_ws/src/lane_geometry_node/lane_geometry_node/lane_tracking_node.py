@@ -3,17 +3,26 @@ from __future__ import annotations
 
 import json
 import math
+from collections import deque
 from dataclasses import dataclass, field
 
 import cv2
 import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseStamped
-from nav_msgs.msg import Path
+from nav_msgs.msg import Odometry, Path
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import String
+
+
+@dataclass(frozen=True)
+class OdomPose:
+    stamp_ns: int
+    x_m: float
+    y_m: float
+    yaw_rad: float
 
 
 @dataclass
@@ -25,6 +34,8 @@ class BoundaryMeasurement:
     rmse_m: float
     confidence: float
     quality_source: str
+    status_frame: int | None = None
+    pair_confidence: float | None = None
 
 
 @dataclass
@@ -57,6 +68,8 @@ class LaneTrackingNode(Node):
     Inputs:
       /perception/lane/left_boundary
       /perception/lane/right_boundary
+      /perception/lane/curve_status
+      /carla/hero_odom
 
     Outputs:
       /perception/lane/tracked_left_boundary
@@ -76,6 +89,7 @@ class LaneTrackingNode(Node):
             "left_input_topic": "/perception/lane/left_boundary",
             "right_input_topic": "/perception/lane/right_boundary",
             "curve_status_topic": "/perception/lane/curve_status",
+            "odom_topic": "/carla/hero_odom",
             "left_output_topic": "/perception/lane/tracked_left_boundary",
             "right_output_topic": "/perception/lane/tracked_right_boundary",
             "center_output_topic": "/perception/lane/tracked_centerline",
@@ -117,6 +131,20 @@ class LaneTrackingNode(Node):
             "maximum_inferred_frames": 8,
             "inferred_boundary_confidence_scale": 0.55,
 
+            # Odometry-aware propagation. The current CARLA bridge publishes
+            # CARLA/Unreal y and yaw signs, while lane curves use ROS-style
+            # forward-left coordinates. These defaults convert odometry into
+            # the same convention as the lane tracker without changing the
+            # bridge topics used by other nodes.
+            "odom_buffer_seconds": 3.0,
+            "maximum_odom_age_ms": 150.0,
+            "odom_y_sign": -1.0,
+            "odom_yaw_sign": -1.0,
+            "maximum_propagation_translation_m": 3.0,
+            "maximum_propagation_yaw_rad": 0.45,
+            "propagation_sample_step_m": 0.25,
+            "minimum_propagated_points": 12,
+
             # Output.
             "path_start_forward_m": 5.0,
             "path_end_forward_m": 30.0,
@@ -125,7 +153,17 @@ class LaneTrackingNode(Node):
             "jpeg_quality": 80,
             "maximum_sync_difference_ms": 50.0,
             "curve_status_match_tolerance_m": 0.20,
+            "curve_status_history_size": 12,
             "fallback_confidence_cap": 0.60,
+            "minimum_pair_confidence_for_width_update": 0.30,
+
+            # A frame-level fitter may return a valid curve belonging to a
+            # distant adjacent lane when only one ego-lane side is visible.
+            # Reject such measurements before they can create or replace a
+            # temporal ego-lane track.
+            "single_boundary_side_tolerance_m": 0.75,
+            "maximum_single_boundary_abs_lateral_m": 5.50,
+
             "log_every": 30,
         }
 
@@ -137,6 +175,7 @@ class LaneTrackingNode(Node):
         self.left_input_topic = str(p("left_input_topic"))
         self.right_input_topic = str(p("right_input_topic"))
         self.curve_status_topic = str(p("curve_status_topic"))
+        self.odom_topic = str(p("odom_topic"))
         self.left_output_topic = str(p("left_output_topic"))
         self.right_output_topic = str(p("right_output_topic"))
         self.center_output_topic = str(p("center_output_topic"))
@@ -206,6 +245,25 @@ class LaneTrackingNode(Node):
             p("inferred_boundary_confidence_scale")
         )
 
+        self.odom_buffer_seconds = float(p("odom_buffer_seconds"))
+        self.maximum_odom_age_ns = int(
+            float(p("maximum_odom_age_ms")) * 1_000_000.0
+        )
+        self.odom_y_sign = float(p("odom_y_sign"))
+        self.odom_yaw_sign = float(p("odom_yaw_sign"))
+        self.maximum_propagation_translation_m = float(
+            p("maximum_propagation_translation_m")
+        )
+        self.maximum_propagation_yaw_rad = float(
+            p("maximum_propagation_yaw_rad")
+        )
+        self.propagation_sample_step_m = float(
+            p("propagation_sample_step_m")
+        )
+        self.minimum_propagated_points = int(
+            p("minimum_propagated_points")
+        )
+
         self.path_start_forward_m = float(p("path_start_forward_m"))
         self.path_end_forward_m = float(p("path_end_forward_m"))
         self.path_step_m = float(p("path_step_m"))
@@ -217,8 +275,21 @@ class LaneTrackingNode(Node):
         self.curve_status_match_tolerance_m = float(
             p("curve_status_match_tolerance_m")
         )
+        self.curve_status_history_size = max(
+            2,
+            int(p("curve_status_history_size")),
+        )
         self.fallback_confidence_cap = float(
             p("fallback_confidence_cap")
+        )
+        self.minimum_pair_confidence_for_width_update = float(
+            p("minimum_pair_confidence_for_width_update")
+        )
+        self.single_boundary_side_tolerance_m = float(
+            p("single_boundary_side_tolerance_m")
+        )
+        self.maximum_single_boundary_abs_lateral_m = float(
+            p("maximum_single_boundary_abs_lateral_m")
         )
         self.log_every = max(1, int(p("log_every")))
 
@@ -248,8 +319,19 @@ class LaneTrackingNode(Node):
         self.latest_left: Path | None = None
         self.latest_right: Path | None = None
         self.latest_curve_status: dict | None = None
+        self.curve_status_history: deque[dict] = deque(
+            maxlen=self.curve_status_history_size
+        )
+        self.selected_curve_status: dict | None = None
         self.current_raw_pair_confidence: float | None = None
         self.current_curve_status_frame: int | None = None
+        self.current_lane_width_update_applied = False
+        self.current_lane_width_update_reason = "not_evaluated"
+
+        self.odom_buffer: deque[OdomPose] = deque()
+        self.previous_lane_pose: OdomPose | None = None
+        self.motion_status = self._empty_motion_status("not_initialized")
+
         self.last_processed_pair: tuple[int, int] | None = None
         self.frame_count = 0
 
@@ -270,6 +352,12 @@ class LaneTrackingNode(Node):
             self.curve_status_topic,
             self._curve_status_callback,
             10,
+        )
+        self.odom_sub = self.create_subscription(
+            Odometry,
+            self.odom_topic,
+            self._odom_callback,
+            50,
         )
 
         self.left_pub = self.create_publisher(
@@ -308,9 +396,12 @@ class LaneTrackingNode(Node):
             f"Curve quality input: {self.curve_status_topic}"
         )
         self.get_logger().info(
-            "Temporal lane tracking enabled: confirmation, gated "
-            "association, confidence-weighted smoothing, short holds, "
-            "and single-side inference."
+            f"Odometry input: {self.odom_topic}"
+        )
+        self.get_logger().info(
+            "Temporal lane tracking enabled: odometry propagation, "
+            "confirmation, gated association, confidence-weighted "
+            "smoothing, short holds, and single-side inference."
         )
 
     def _validate_parameters(self) -> None:
@@ -330,6 +421,34 @@ class LaneTrackingNode(Node):
             raise ValueError("path_step_m must be positive")
         if self.minimum_lane_width_m >= self.maximum_lane_width_m:
             raise ValueError("invalid lane-width range")
+        if self.odom_buffer_seconds <= 0.0:
+            raise ValueError("odom_buffer_seconds must be positive")
+        if self.maximum_odom_age_ns <= 0:
+            raise ValueError("maximum_odom_age_ms must be positive")
+        if self.maximum_propagation_translation_m <= 0.0:
+            raise ValueError(
+                "maximum_propagation_translation_m must be positive"
+            )
+        if self.maximum_propagation_yaw_rad <= 0.0:
+            raise ValueError(
+                "maximum_propagation_yaw_rad must be positive"
+            )
+        if self.propagation_sample_step_m <= 0.0:
+            raise ValueError(
+                "propagation_sample_step_m must be positive"
+            )
+        if self.minimum_propagated_points < 3:
+            raise ValueError(
+                "minimum_propagated_points must be at least 3"
+            )
+        if self.single_boundary_side_tolerance_m < 0.0:
+            raise ValueError(
+                "single_boundary_side_tolerance_m must be non-negative"
+            )
+        if self.maximum_single_boundary_abs_lateral_m <= 0.0:
+            raise ValueError(
+                "maximum_single_boundary_abs_lateral_m must be positive"
+            )
 
     @staticmethod
     def _stamp_ns(message: Path) -> int:
@@ -355,6 +474,317 @@ class LaneTrackingNode(Node):
 
         if isinstance(parsed, dict):
             self.latest_curve_status = parsed
+            self.curve_status_history.append(parsed)
+            self._try_process()
+
+    def _odom_callback(self, message: Odometry) -> None:
+        stamp = message.header.stamp
+        stamp_ns = (
+            int(stamp.sec) * 1_000_000_000
+            + int(stamp.nanosec)
+        )
+        if stamp_ns <= 0:
+            return
+
+        position = message.pose.pose.position
+        orientation = message.pose.pose.orientation
+        yaw = self._quaternion_to_yaw(orientation)
+
+        pose = OdomPose(
+            stamp_ns=stamp_ns,
+            x_m=float(position.x),
+            y_m=self.odom_y_sign * float(position.y),
+            yaw_rad=self._normalize_angle(
+                self.odom_yaw_sign * yaw
+            ),
+        )
+        self.odom_buffer.append(pose)
+
+        newest_stamp = self.odom_buffer[-1].stamp_ns
+        oldest_allowed = newest_stamp - int(
+            self.odom_buffer_seconds * 1_000_000_000.0
+        )
+        while (
+            self.odom_buffer
+            and self.odom_buffer[0].stamp_ns < oldest_allowed
+        ):
+            self.odom_buffer.popleft()
+
+    @staticmethod
+    def _quaternion_to_yaw(orientation) -> float:
+        siny_cosp = 2.0 * (
+            orientation.w * orientation.z
+            + orientation.x * orientation.y
+        )
+        cosy_cosp = 1.0 - 2.0 * (
+            orientation.y * orientation.y
+            + orientation.z * orientation.z
+        )
+        return math.atan2(siny_cosp, cosy_cosp)
+
+    @staticmethod
+    def _normalize_angle(angle: float) -> float:
+        return math.atan2(math.sin(angle), math.cos(angle))
+
+    def _empty_motion_status(self, reason: str) -> dict:
+        return {
+            "odom_available": False,
+            "odom_age_ms": None,
+            "odom_buffer_size": len(
+                getattr(self, "odom_buffer", ())
+            ),
+            "delta_forward_m": 0.0,
+            "delta_lateral_m": 0.0,
+            "delta_yaw_rad": 0.0,
+            "propagation_applied": False,
+            "propagated_tracks": 0,
+            "reason": reason,
+        }
+
+    def _nearest_odom_pose(
+        self,
+        stamp_ns: int,
+    ) -> tuple[OdomPose | None, float | None]:
+        if not self.odom_buffer:
+            return None, None
+
+        pose = min(
+            self.odom_buffer,
+            key=lambda item: abs(item.stamp_ns - stamp_ns),
+        )
+        age_ns = abs(pose.stamp_ns - stamp_ns)
+        age_ms = age_ns / 1_000_000.0
+
+        if age_ns > self.maximum_odom_age_ns:
+            return None, age_ms
+        return pose, age_ms
+
+    def _prepare_motion_for_frame(self, stamp_ns: int) -> None:
+        current_pose, age_ms = self._nearest_odom_pose(stamp_ns)
+        self.motion_status = self._empty_motion_status(
+            "odom_unavailable"
+        )
+        self.motion_status["odom_age_ms"] = age_ms
+        self.motion_status["odom_buffer_size"] = len(self.odom_buffer)
+
+        if current_pose is None:
+            # Measurements processed without a matching odometry sample are
+            # already expressed in the current camera frame. Reinitialize the
+            # pose anchor on the next valid sample rather than applying one
+            # accumulated transform to tracks that may have been updated in
+            # the meantime.
+            self.previous_lane_pose = None
+            return
+
+        self.motion_status["odom_available"] = True
+
+        if self.previous_lane_pose is None:
+            self.previous_lane_pose = current_pose
+            self.motion_status["reason"] = "initialized"
+            return
+
+        previous_pose = self.previous_lane_pose
+        world_dx = current_pose.x_m - previous_pose.x_m
+        world_dy = current_pose.y_m - previous_pose.y_m
+
+        cos_previous = math.cos(previous_pose.yaw_rad)
+        sin_previous = math.sin(previous_pose.yaw_rad)
+        delta_forward = (
+            cos_previous * world_dx + sin_previous * world_dy
+        )
+        delta_lateral = (
+            -sin_previous * world_dx + cos_previous * world_dy
+        )
+        delta_yaw = self._normalize_angle(
+            current_pose.yaw_rad - previous_pose.yaw_rad
+        )
+
+        self.motion_status["delta_forward_m"] = delta_forward
+        self.motion_status["delta_lateral_m"] = delta_lateral
+        self.motion_status["delta_yaw_rad"] = delta_yaw
+
+        translation = math.hypot(delta_forward, delta_lateral)
+        if translation < 1e-4 and abs(delta_yaw) < 1e-5:
+            self.previous_lane_pose = current_pose
+            self.motion_status["reason"] = "stationary"
+            return
+
+        if (
+            translation > self.maximum_propagation_translation_m
+            or abs(delta_yaw) > self.maximum_propagation_yaw_rad
+        ):
+            self._reset_tracks_after_motion_jump()
+            self.previous_lane_pose = current_pose
+            self.motion_status["reason"] = "motion_jump_reset"
+            return
+
+        propagated = self._propagate_all_tracks(
+            previous_pose,
+            current_pose,
+        )
+        self.previous_lane_pose = current_pose
+        self.motion_status["propagated_tracks"] = propagated
+        self.motion_status["propagation_applied"] = propagated > 0
+        self.motion_status["reason"] = (
+            "propagated" if propagated > 0 else "no_active_tracks"
+        )
+
+    def _reset_tracks_after_motion_jump(self) -> None:
+        self._deactivate_track(self.left_track)
+        self._deactivate_track(self.right_track)
+        self.left_inferred_frames = 0
+        self.right_inferred_frames = 0
+        self.lane_width_confidence *= 0.5
+
+    def _propagate_all_tracks(
+        self,
+        previous_pose: OdomPose,
+        current_pose: OdomPose,
+    ) -> int:
+        propagated = 0
+        for track in (self.left_track, self.right_track):
+            if self._propagate_track(
+                track,
+                previous_pose,
+                current_pose,
+            ):
+                propagated += 1
+        return propagated
+
+    def _propagate_track(
+        self,
+        track: BoundaryTrack,
+        previous_pose: OdomPose,
+        current_pose: OdomPose,
+    ) -> bool:
+        changed = False
+
+        if track.coefficients is not None:
+            result = self._propagate_polynomial(
+                track.coefficients,
+                track.forward_min_m,
+                track.forward_max_m,
+                previous_pose,
+                current_pose,
+            )
+            if result is None:
+                self._deactivate_track(track)
+            else:
+                (
+                    track.coefficients,
+                    track.forward_min_m,
+                    track.forward_max_m,
+                ) = result
+                changed = True
+
+        if track.pending_coefficients is not None:
+            pending_result = self._propagate_polynomial(
+                track.pending_coefficients,
+                self.path_start_forward_m,
+                self.path_end_forward_m,
+                previous_pose,
+                current_pose,
+            )
+            if pending_result is None:
+                track.pending_coefficients = None
+                track.pending_hits = 0
+            else:
+                track.pending_coefficients = pending_result[0]
+                changed = True
+
+        return changed
+
+    def _propagate_polynomial(
+        self,
+        coefficients: np.ndarray,
+        forward_min_m: float,
+        forward_max_m: float,
+        previous_pose: OdomPose,
+        current_pose: OdomPose,
+    ) -> tuple[np.ndarray, float, float] | None:
+        sample_min = max(
+            self.forward_min_m,
+            min(forward_min_m, forward_max_m),
+        )
+        sample_max = min(
+            self.forward_max_m,
+            max(forward_min_m, forward_max_m),
+        )
+
+        if sample_max - sample_min < 2.0:
+            sample_min = self.path_start_forward_m
+            sample_max = self.path_end_forward_m
+
+        forward_old = np.arange(
+            sample_min,
+            sample_max + 0.5 * self.propagation_sample_step_m,
+            self.propagation_sample_step_m,
+            dtype=np.float64,
+        )
+        lateral_old = np.polyval(coefficients, forward_old)
+
+        delta_yaw = self._normalize_angle(
+            previous_pose.yaw_rad - current_pose.yaw_rad
+        )
+        cos_delta = math.cos(delta_yaw)
+        sin_delta = math.sin(delta_yaw)
+
+        world_origin_dx = previous_pose.x_m - current_pose.x_m
+        world_origin_dy = previous_pose.y_m - current_pose.y_m
+        cos_current = math.cos(current_pose.yaw_rad)
+        sin_current = math.sin(current_pose.yaw_rad)
+
+        origin_forward_current = (
+            cos_current * world_origin_dx
+            + sin_current * world_origin_dy
+        )
+        origin_lateral_current = (
+            -sin_current * world_origin_dx
+            + cos_current * world_origin_dy
+        )
+
+        forward_new = (
+            cos_delta * forward_old
+            - sin_delta * lateral_old
+            + origin_forward_current
+        )
+        lateral_new = (
+            sin_delta * forward_old
+            + cos_delta * lateral_old
+            + origin_lateral_current
+        )
+
+        valid = (
+            np.isfinite(forward_new)
+            & np.isfinite(lateral_new)
+            & (forward_new >= self.forward_min_m)
+            & (forward_new <= self.forward_max_m)
+            & (lateral_new >= self.right_extent_m - 2.0)
+            & (lateral_new <= self.left_extent_m + 2.0)
+        )
+        forward_new = forward_new[valid]
+        lateral_new = lateral_new[valid]
+
+        if len(forward_new) < self.minimum_propagated_points:
+            return None
+
+        try:
+            propagated_coefficients = np.polyfit(
+                forward_new,
+                lateral_new,
+                2,
+            )
+        except (np.linalg.LinAlgError, ValueError, TypeError):
+            return None
+
+        if not np.isfinite(propagated_coefficients).all():
+            return None
+
+        return (
+            propagated_coefficients,
+            float(np.min(forward_new)),
+            float(np.max(forward_new)),
+        )
 
     def _try_process(self) -> None:
         if self.latest_left is None or self.latest_right is None:
@@ -370,10 +800,126 @@ class LaneTrackingNode(Node):
         if pair == self.last_processed_pair:
             return
 
+        matching_status = self._find_matching_status_for_pair(
+            self.latest_left,
+            self.latest_right,
+        )
+        if matching_status is None:
+            return
+
+        self.selected_curve_status = matching_status
         self.last_processed_pair = pair
         self._process_pair(self.latest_left, self.latest_right)
 
+    def _find_matching_status_for_pair(
+        self,
+        left_message: Path,
+        right_message: Path,
+    ) -> dict | None:
+        left_coefficients = self._coefficients_from_path(left_message)
+        right_coefficients = self._coefficients_from_path(right_message)
+
+        for status in reversed(self.curve_status_history):
+            if self._status_matches_path_coefficients(
+                status,
+                "left",
+                left_coefficients,
+            ) and self._status_matches_path_coefficients(
+                status,
+                "right",
+                right_coefficients,
+            ):
+                return status
+
+        return None
+
+    def _status_matches_path_coefficients(
+        self,
+        status: dict,
+        side: str,
+        path_coefficients: np.ndarray | None,
+    ) -> bool:
+        diagnostics = status.get(side)
+
+        if path_coefficients is None:
+            return diagnostics is None
+
+        if not isinstance(diagnostics, dict):
+            return False
+
+        values = diagnostics.get("coefficients")
+        if not isinstance(values, list) or len(values) != 3:
+            return False
+
+        try:
+            status_coefficients = np.asarray(values, dtype=np.float64)
+        except (TypeError, ValueError):
+            return False
+
+        if not np.isfinite(status_coefficients).all():
+            return False
+
+        forward = self.association_forward_values
+        difference = np.abs(
+            np.polyval(status_coefficients, forward)
+            - np.polyval(path_coefficients, forward)
+        )
+        return bool(
+            float(np.max(difference))
+            <= self.curve_status_match_tolerance_m
+        )
+
+    @staticmethod
+    def _coefficients_from_path(message: Path) -> np.ndarray | None:
+        if len(message.poses) < 3:
+            return None
+
+        points = np.asarray(
+            [
+                (
+                    float(pose.pose.position.x),
+                    float(pose.pose.position.y),
+                )
+                for pose in message.poses
+            ],
+            dtype=np.float64,
+        )
+        points = points[np.isfinite(points).all(axis=1)]
+
+        if len(points) < 3 or float(np.ptp(points[:, 0])) < 2.0:
+            return None
+
+        try:
+            return np.polyfit(points[:, 0], points[:, 1], 2)
+        except (np.linalg.LinAlgError, ValueError, TypeError):
+            return None
+
     def _process_pair(self, left_message: Path, right_message: Path) -> None:
+        lane_stamp_ns = self._stamp_ns(left_message)
+        self._prepare_motion_for_frame(lane_stamp_ns)
+
+        self.current_raw_pair_confidence = None
+        self.current_curve_status_frame = None
+        self.current_lane_width_update_applied = False
+        self.current_lane_width_update_reason = "not_evaluated"
+        self.current_measurement_gate = {
+            "left": "not_evaluated",
+            "right": "not_evaluated",
+        }
+
+        if self.selected_curve_status is not None:
+            status_frame = self.selected_curve_status.get("frame")
+            if status_frame is not None:
+                self.current_curve_status_frame = int(status_frame)
+
+            pair_confidence = self.selected_curve_status.get(
+                "pair_confidence"
+            )
+            if pair_confidence is not None:
+                self.current_raw_pair_confidence = float(
+                    np.clip(float(pair_confidence), 0.0, 1.0)
+                )
+
         left_measurement = self._measurement_from_path(
             left_message,
             "left",
@@ -382,27 +928,6 @@ class LaneTrackingNode(Node):
             right_message,
             "right",
         )
-
-        self.current_raw_pair_confidence = None
-        self.current_curve_status_frame = None
-        if (
-            left_measurement is not None
-            and right_measurement is not None
-            and left_measurement.quality_source == "curve_status"
-            and right_measurement.quality_source == "curve_status"
-            and self.latest_curve_status is not None
-        ):
-            pair_confidence = self.latest_curve_status.get(
-                "pair_confidence"
-            )
-            if pair_confidence is not None:
-                self.current_raw_pair_confidence = float(
-                    np.clip(float(pair_confidence), 0.0, 1.0)
-                )
-
-            frame = self.latest_curve_status.get("frame")
-            if frame is not None:
-                self.current_curve_status_frame = int(frame)
 
         self._update_track(self.left_track, left_measurement)
         self._update_track(self.right_track, right_measurement)
@@ -527,6 +1052,7 @@ class LaneTrackingNode(Node):
         side: str,
     ) -> BoundaryMeasurement | None:
         if len(message.poses) < 3:
+            self.current_measurement_gate[side] = "missing"
             return None
 
         points = np.asarray(
@@ -543,6 +1069,9 @@ class LaneTrackingNode(Node):
         finite = np.isfinite(points).all(axis=1)
         points = points[finite]
         if len(points) < 3:
+            self.current_measurement_gate[side] = (
+                "rejected_nonfinite_points"
+            )
             return None
 
         forward = points[:, 0]
@@ -550,11 +1079,48 @@ class LaneTrackingNode(Node):
         forward_span = float(np.ptp(forward))
 
         if forward_span < 2.0:
+            self.current_measurement_gate[side] = (
+                "rejected_short_forward_span"
+            )
             return None
 
         try:
             coefficients = np.polyfit(forward, lateral, 2)
         except (np.linalg.LinAlgError, ValueError, TypeError):
+            self.current_measurement_gate[side] = "rejected_polyfit"
+            return None
+
+        lateral_at_reference = float(
+            np.polyval(coefficients, self.reference_forward_m)
+        )
+
+        if (
+            abs(lateral_at_reference)
+            > self.maximum_single_boundary_abs_lateral_m
+        ):
+            self.current_measurement_gate[side] = (
+                "rejected_far_from_ego_lane"
+            )
+            return None
+
+        if (
+            side == "left"
+            and lateral_at_reference
+            < -self.single_boundary_side_tolerance_m
+        ):
+            self.current_measurement_gate[side] = (
+                "rejected_wrong_side"
+            )
+            return None
+
+        if (
+            side == "right"
+            and lateral_at_reference
+            > self.single_boundary_side_tolerance_m
+        ):
+            self.current_measurement_gate[side] = (
+                "rejected_wrong_side"
+            )
             return None
 
         diagnostics = self._matching_curve_diagnostics(
@@ -602,7 +1168,34 @@ class LaneTrackingNode(Node):
             quality_source = "path_fallback"
 
         if confidence < self.minimum_measurement_confidence:
+            self.current_measurement_gate[side] = (
+                "rejected_low_confidence"
+            )
             return None
+
+        self.current_measurement_gate[side] = (
+            "accepted_curve_status"
+            if quality_source == "curve_status"
+            else "accepted_path_fallback"
+        )
+
+        status_frame = None
+        pair_confidence = None
+        if (
+            quality_source == "curve_status"
+            and self.selected_curve_status is not None
+        ):
+            frame = self.selected_curve_status.get("frame")
+            if frame is not None:
+                status_frame = int(frame)
+
+            raw_pair_confidence = self.selected_curve_status.get(
+                "pair_confidence"
+            )
+            if raw_pair_confidence is not None:
+                pair_confidence = float(
+                    np.clip(float(raw_pair_confidence), 0.0, 1.0)
+                )
 
         return BoundaryMeasurement(
             coefficients=coefficients,
@@ -612,6 +1205,8 @@ class LaneTrackingNode(Node):
             rmse_m=rmse_m,
             confidence=confidence,
             quality_source=quality_source,
+            status_frame=status_frame,
+            pair_confidence=pair_confidence,
         )
 
     def _matching_curve_diagnostics(
@@ -619,7 +1214,7 @@ class LaneTrackingNode(Node):
         side: str,
         path_coefficients: np.ndarray,
     ) -> dict | None:
-        status = self.latest_curve_status
+        status = self.selected_curve_status
         if not isinstance(status, dict):
             return None
 
@@ -895,6 +1490,7 @@ class LaneTrackingNode(Node):
         right: np.ndarray | None,
     ) -> tuple[np.ndarray | None, np.ndarray | None]:
         if left is None or right is None:
+            self.current_lane_width_update_reason = "incomplete_pair"
             return left, right
 
         forward = self.association_forward_values
@@ -915,35 +1511,52 @@ class LaneTrackingNode(Node):
             )
 
         if plausible:
-            if self.lane_width_confidence <= 0.0:
-                self.lane_width_m = mean_width
-            else:
-                alpha = self.lane_width_smoothing_alpha
-                self.lane_width_m = (
-                    (1.0 - alpha) * self.lane_width_m
-                    + alpha * mean_width
-                )
-
-            pair_confidence = math.sqrt(
-                max(self.left_track.confidence, 0.0)
-                * max(self.right_track.confidence, 0.0)
+            trusted_pair = (
+                self.current_raw_pair_confidence is not None
+                and self.current_raw_pair_confidence
+                >= self.minimum_pair_confidence_for_width_update
             )
-            if self.current_raw_pair_confidence is not None:
+
+            if trusted_pair:
+                if self.lane_width_confidence <= 0.0:
+                    self.lane_width_m = mean_width
+                else:
+                    alpha = self.lane_width_smoothing_alpha
+                    self.lane_width_m = (
+                        (1.0 - alpha) * self.lane_width_m
+                        + alpha * mean_width
+                    )
+
+                track_pair_confidence = math.sqrt(
+                    max(self.left_track.confidence, 0.0)
+                    * max(self.right_track.confidence, 0.0)
+                )
                 pair_confidence = min(
-                    pair_confidence,
+                    track_pair_confidence,
                     self.current_raw_pair_confidence,
                 )
-            self.lane_width_confidence = float(
-                np.clip(
-                    0.85 * self.lane_width_confidence
-                    + 0.15 * pair_confidence,
-                    0.0,
-                    1.0,
+                self.lane_width_confidence = float(
+                    np.clip(
+                        0.85 * self.lane_width_confidence
+                        + 0.15 * pair_confidence,
+                        0.0,
+                        1.0,
+                    )
                 )
-            )
+                self.current_lane_width_update_applied = True
+                self.current_lane_width_update_reason = "trusted_pair"
+            else:
+                self.lane_width_confidence *= 0.995
+                self.current_lane_width_update_reason = (
+                    "pair_confidence_unavailable"
+                    if self.current_raw_pair_confidence is None
+                    else "pair_confidence_below_threshold"
+                )
+
             return left, right
 
         self.lane_width_confidence *= 0.92
+        self.current_lane_width_update_reason = "geometry_rejected"
 
         if self.left_track.confidence >= self.right_track.confidence:
             return left, None
@@ -1101,6 +1714,41 @@ class LaneTrackingNode(Node):
             cv2.LINE_AA,
         )
 
+        motion = self.motion_status
+        age_ms = motion.get("odom_age_ms")
+        age_text = (
+            f"{float(age_ms):.0f}ms"
+            if age_ms is not None
+            else "n/a"
+        )
+        cv2.putText(
+            image,
+            (
+                f"odom: {motion.get('reason', 'unknown')} "
+                f"age={age_text}"
+            ),
+            (6, self.height - 24),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.35,
+            (220, 220, 220),
+            1,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            image,
+            (
+                f"dF={motion.get('delta_forward_m', 0.0):+.2f}m "
+                f"dL={motion.get('delta_lateral_m', 0.0):+.2f}m "
+                f"dYaw={motion.get('delta_yaw_rad', 0.0):+.3f}"
+            ),
+            (6, self.height - 8),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.35,
+            (220, 220, 220),
+            1,
+            cv2.LINE_AA,
+        )
+
         return image
 
     def _draw_curve(
@@ -1236,8 +1884,16 @@ class LaneTrackingNode(Node):
                 "frame": self.frame_count,
                 "curve_status_frame": self.current_curve_status_frame,
                 "raw_pair_confidence": self.current_raw_pair_confidence,
+                "measurement_gate": self.current_measurement_gate,
+                "motion": self.motion_status,
                 "lane_width_estimate_m": self.lane_width_m,
                 "lane_width_confidence": self.lane_width_confidence,
+                "lane_width_update_applied": (
+                    self.current_lane_width_update_applied
+                ),
+                "lane_width_update_reason": (
+                    self.current_lane_width_update_reason
+                ),
                 "lane_width_at_reference_m": lane_width_at_reference,
                 "center_offset_at_reference_m": center_offset_at_reference,
                 "left": self._track_status(
@@ -1287,6 +1943,7 @@ class LaneTrackingNode(Node):
                         for value in measurement.coefficients
                     ],
                     "quality_source": measurement.quality_source,
+                    "status_frame": measurement.status_frame,
                     "confidence": measurement.confidence,
                     "rmse_m": measurement.rmse_m,
                     "point_count": measurement.point_count,
