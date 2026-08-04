@@ -25,6 +25,7 @@ class CarlaRgbPublisher(Node):
         self.declare_parameter('fps', 15)
         self.declare_parameter('fov', 90.0)
         self.declare_parameter('camera_frame_id', 'carla_camera')
+        self.declare_parameter('odom_rate_hz', 20.0)
 
         # Compressed image params
         self.declare_parameter('publish_raw', True)          # set True if you also want /image_raw
@@ -44,6 +45,11 @@ class CarlaRgbPublisher(Node):
         self.camera_frame_id = str(
             self.get_parameter('camera_frame_id').value
         )
+        self.odom_rate_hz = float(
+            self.get_parameter('odom_rate_hz').value
+        )
+        if self.odom_rate_hz <= 0.0:
+            raise ValueError('odom_rate_hz must be positive')
 
         self.publish_raw = bool(self.get_parameter('publish_raw').value)
         self.jpeg_quality = int(self.get_parameter('jpeg_quality').value)
@@ -112,11 +118,18 @@ class CarlaRgbPublisher(Node):
         self.camera = self.world.spawn_actor(cam_bp, cam_transform, attach_to=self.vehicle)
         self.camera.listen(self._on_image)
 
-        # Status timer
-        self.timer = self.create_timer(1.0, self._status_tick)
+        # Independent status and ego-odometry timers.
+        self.status_timer = self.create_timer(1.0, self._status_tick)
+        self.odom_timer = self.create_timer(
+            1.0 / self.odom_rate_hz,
+            self.publish_hero_odom,
+        )
 
         self.get_logger().info("Publishing /carla/rgb/image_raw/compressed (sensor_msgs/CompressedImage)")
         self.get_logger().info("Publishing /carla/rgb/camera_info (sensor_msgs/CameraInfo)")
+        self.get_logger().info(
+            f"Publishing /carla/hero_odom at {self.odom_rate_hz:.1f} Hz"
+        )
         if self.publish_raw:
             self.get_logger().info("Also publishing /carla/rgb/image_raw (sensor_msgs/Image) [HIGH BANDWIDTH]")
         self.get_logger().info("Listening for control on /carla/cmd_vel (geometry_msgs/Twist)")
@@ -221,7 +234,6 @@ class CarlaRgbPublisher(Node):
         self.hero_odom_pub.publish(odom)
 
     def _status_tick(self):
-        self.publish_hero_odom()
         msg = String()
         msg.data = (
             f"Connected: {self.world.get_map().name} | "
