@@ -2,7 +2,7 @@
 import rclpy
 from rclpy.node import Node
 
-from sensor_msgs.msg import Image, CompressedImage
+from sensor_msgs.msg import Image, CompressedImage, CameraInfo
 from std_msgs.msg import String
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
@@ -23,6 +23,8 @@ class CarlaRgbPublisher(Node):
         self.declare_parameter('width', 800)
         self.declare_parameter('height', 600)
         self.declare_parameter('fps', 15)
+        self.declare_parameter('fov', 90.0)
+        self.declare_parameter('camera_frame_id', 'carla_camera')
 
         # Compressed image params
         self.declare_parameter('publish_raw', True)          # set True if you also want /image_raw
@@ -38,6 +40,10 @@ class CarlaRgbPublisher(Node):
         self.width = int(self.get_parameter('width').value)
         self.height = int(self.get_parameter('height').value)
         fps = int(self.get_parameter('fps').value)
+        self.fov = float(self.get_parameter('fov').value)
+        self.camera_frame_id = str(
+            self.get_parameter('camera_frame_id').value
+        )
 
         self.publish_raw = bool(self.get_parameter('publish_raw').value)
         self.jpeg_quality = int(self.get_parameter('jpeg_quality').value)
@@ -58,6 +64,12 @@ class CarlaRgbPublisher(Node):
         # Compressed camera topic (Foxglove-friendly)
         self.img_comp_pub = self.create_publisher(
             CompressedImage, '/carla/rgb/image_raw/compressed', 10
+        )
+
+        self.camera_info_pub = self.create_publisher(
+            CameraInfo,
+            '/carla/rgb/camera_info',
+            10,
         )
 
         # Optional raw topic (big bandwidth)
@@ -93,7 +105,7 @@ class CarlaRgbPublisher(Node):
         cam_bp = bp_lib.find('sensor.camera.rgb')
         cam_bp.set_attribute('image_size_x', str(self.width))
         cam_bp.set_attribute('image_size_y', str(self.height))
-        cam_bp.set_attribute('fov', '90')
+        cam_bp.set_attribute('fov', str(self.fov))
         cam_bp.set_attribute('sensor_tick', str(1.0 / max(fps, 1)))
 
         cam_transform = carla.Transform(carla.Location(x=1.5, z=2.4))
@@ -104,10 +116,52 @@ class CarlaRgbPublisher(Node):
         self.timer = self.create_timer(1.0, self._status_tick)
 
         self.get_logger().info("Publishing /carla/rgb/image_raw/compressed (sensor_msgs/CompressedImage)")
+        self.get_logger().info("Publishing /carla/rgb/camera_info (sensor_msgs/CameraInfo)")
         if self.publish_raw:
             self.get_logger().info("Also publishing /carla/rgb/image_raw (sensor_msgs/Image) [HIGH BANDWIDTH]")
         self.get_logger().info("Listening for control on /carla/cmd_vel (geometry_msgs/Twist)")
         self.get_logger().info("Controls: linear.x>0 forward, linear.x<0 reverse, angular.z left/right")
+
+    def _build_camera_info(self, stamp):
+        """Build pinhole calibration for the CARLA RGB camera."""
+        fov_rad = math.radians(self.fov)
+
+        fx = self.width / (
+            2.0 * math.tan(fov_rad / 2.0)
+        )
+        fy = fx
+        cx = self.width / 2.0
+        cy = self.height / 2.0
+
+        msg = CameraInfo()
+        msg.header.stamp = stamp
+        msg.header.frame_id = self.camera_frame_id
+
+        msg.width = int(self.width)
+        msg.height = int(self.height)
+
+        msg.distortion_model = 'plumb_bob'
+        msg.d = [0.0, 0.0, 0.0, 0.0, 0.0]
+
+        msg.k = [
+            fx, 0.0, cx,
+            0.0, fy, cy,
+            0.0, 0.0, 1.0,
+        ]
+
+        msg.r = [
+            1.0, 0.0, 0.0,
+            0.0, 1.0, 0.0,
+            0.0, 0.0, 1.0,
+        ]
+
+        msg.p = [
+            fx, 0.0, cx, 0.0,
+            0.0, fy, cy, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+        ]
+
+        return msg
 
     def _carla_rotation_to_quaternion(self, rotation):
         roll = math.radians(rotation.roll)
@@ -187,16 +241,19 @@ class CarlaRgbPublisher(Node):
         if ok:
             msg = CompressedImage()
             msg.header.stamp = stamp
-            msg.header.frame_id = "carla_camera"
+            msg.header.frame_id = self.camera_frame_id
             msg.format = "jpeg"
             msg.data = jpg.tobytes()
             self.img_comp_pub.publish(msg)
+
+        camera_info = self._build_camera_info(stamp)
+        self.camera_info_pub.publish(camera_info)
 
         # Optional raw publish
         if self.img_pub is not None:
             ros_img = Image()
             ros_img.header.stamp = stamp
-            ros_img.header.frame_id = "carla_camera"
+            ros_img.header.frame_id = self.camera_frame_id
             ros_img.height = image.height
             ros_img.width = image.width
             ros_img.encoding = "bgr8"

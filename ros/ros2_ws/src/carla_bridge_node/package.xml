@@ -1,11 +1,27 @@
 <?xml version="1.0"?>
-<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<?xml-model
+  href="http://download.ros.org/schema/package_format3.xsd"
+  schematypens="http://www.w3.org/2001/XMLSchema"?>
+
 <package format="3">
   <name>carla_bridge_node</name>
-  <version>0.0.0</version>
-  <description>TODO: Package description</description>
-  <maintainer email="danielmartinez@todo.todo">danielmartinez</maintainer>
-  <license>TODO: License declaration</license>
+  <version>0.1.0</version>
+
+  <description>
+    Minimal CARLA RGB, odometry and vehicle-control bridge.
+  </description>
+
+  <maintainer email="daniel.mcvg@gmail.com">
+    danielmartinez
+  </maintainer>
+
+  <license>MIT</license>
+
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
@@ -15,5 +31,4 @@
   <export>
     <build_type>ament_python</build_type>
   </export>
-  <depend>nav_msgs</depend>
 </package>
