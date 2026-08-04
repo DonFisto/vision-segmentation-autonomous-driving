@@ -1,0 +1,25 @@
+/foxglove_bridge:
+  ros__parameters:
+    address: "0.0.0.0"
+    port: 8765
+
+    topic_whitelist:
+      - "^/carla/.*"
+      - "^/perception/.*"
+      - "^/navigation/.*"
+      - "^/tf$"
+      - "^/tf_static$"
+      - "^/clock$"
+      - "^/carla_status$"
+
+    service_whitelist:
+      - "(?!)"
+    param_whitelist:
+      - "(?!)"
+    client_topic_whitelist:
+      - "(?!)"
+
+    capabilities:
+      - "connectionGraph"
+    include_hidden: false
+    sysinfo: false
