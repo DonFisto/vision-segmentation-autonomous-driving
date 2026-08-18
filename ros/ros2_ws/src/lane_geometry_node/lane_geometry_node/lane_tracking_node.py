@@ -1882,6 +1882,16 @@ class LaneTrackingNode(Node):
         message.data = json.dumps(
             {
                 "frame": self.frame_count,
+                "stamp_ns": (
+                    int(self.last_processed_pair[0])
+                    if self.last_processed_pair is not None
+                    else None
+                ),
+                "frame_id": (
+                    self.latest_left.header.frame_id
+                    if self.latest_left is not None
+                    else ""
+                ),
                 "curve_status_frame": self.current_curve_status_frame,
                 "raw_pair_confidence": self.current_raw_pair_confidence,
                 "measurement_gate": self.current_measurement_gate,

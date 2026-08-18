@@ -1,0 +1,6 @@
+builtin_interfaces/Duration time_from_start
+geometry_msgs/Pose pose
+float32 longitudinal_velocity_mps
+float32 longitudinal_acceleration_mps2
+float32 curvature
+float32 steering_angle_rad
