@@ -23,6 +23,11 @@ class TopologyDiagnosticNode(Node):
         self.declare_parameter("port", 2000)
         self.declare_parameter("timeout_s", 5.0)
 
+        self.declare_parameter(
+            "sampling_resolution_m",
+            2.0,
+        )
+
         host = str(
             self.get_parameter("host").value
         )
@@ -35,6 +40,12 @@ class TopologyDiagnosticNode(Node):
             self.get_parameter("timeout_s").value
         )
 
+        sampling_resolution_m = float(
+            self.get_parameter(
+                "sampling_resolution_m"
+            ).value
+        )
+
         self.get_logger().info(
             f"Connecting to CARLA at {host}:{port}"
         )
@@ -45,16 +56,25 @@ class TopologyDiagnosticNode(Node):
         world = client.get_world()
         carla_map = world.get_map()
 
-        graph = build_topology_graph(carla_map)
+        graph = build_topology_graph(
+            carla_map,
+            sampling_resolution_m=(
+                sampling_resolution_m
+            ),
+        )
 
         self._report(
             map_name=carla_map.name,
+            sampling_resolution_m=(
+                sampling_resolution_m
+            ),
             graph=graph,
         )
 
     def _report(
         self,
         map_name,
+        sampling_resolution_m,
         graph,
     ) -> None:
         logger = self.get_logger()
@@ -64,30 +84,27 @@ class TopologyDiagnosticNode(Node):
         )
 
         logger.info(
+            f"sampling_resolution_m="
+            f"{sampling_resolution_m:.3f}"
+        )
+
+        logger.info(
             "topology "
             f"nodes={len(graph.nodes)} "
             f"edges={len(graph.edges)}"
         )
 
-        out_distribution = (
-            graph.out_degree_distribution()
-        )
-
-        in_distribution = (
-            graph.in_degree_distribution()
-        )
-
         logger.info(
             "out_degree_distribution="
             + self._format_distribution(
-                out_distribution
+                graph.out_degree_distribution()
             )
         )
 
         logger.info(
             "in_degree_distribution="
             + self._format_distribution(
-                in_distribution
+                graph.in_degree_distribution()
             )
         )
 
@@ -104,29 +121,70 @@ class TopologyDiagnosticNode(Node):
             f"sinks={len(sinks)}"
         )
 
-        endpoint_distances = [
-            edge.endpoint_distance_m
-            for edge in graph.edges.values()
+        edges = list(graph.edges.values())
+
+        lengths = [
+            edge.length_m
+            for edge in edges
         ]
 
-        if endpoint_distances:
-            logger.info(
-                "endpoint_distance_m "
-                f"min={min(endpoint_distances):.3f} "
-                f"mean="
-                f"{statistics.mean(endpoint_distances):.3f} "
-                f"max={max(endpoint_distances):.3f} "
-                "(diagnostic only; not route cost)"
+        chords = [
+            edge.endpoint_distance_m
+            for edge in edges
+        ]
+
+        sample_counts = [
+            len(edge.geometry)
+            for edge in edges
+        ]
+
+        ratios = [
+            (
+                edge.length_m
+                / edge.endpoint_distance_m
             )
+            if edge.endpoint_distance_m > 1e-6
+            else 1.0
+            for edge in edges
+        ]
+
+        logger.info(
+            "edge_length_m "
+            f"min={min(lengths):.3f} "
+            f"mean={statistics.mean(lengths):.3f} "
+            f"max={max(lengths):.3f}"
+        )
+
+        logger.info(
+            "endpoint_chord_m "
+            f"min={min(chords):.3f} "
+            f"mean={statistics.mean(chords):.3f} "
+            f"max={max(chords):.3f}"
+        )
+
+        logger.info(
+            "geometry_samples "
+            f"min={min(sample_counts)} "
+            f"mean={statistics.mean(sample_counts):.2f} "
+            f"max={max(sample_counts)}"
+        )
+
+        logger.info(
+            "arc_chord_ratio "
+            f"min={min(ratios):.4f} "
+            f"mean={statistics.mean(ratios):.4f} "
+            f"max={max(ratios):.4f}"
+        )
 
         junction_edges = sum(
             1
-            for edge in graph.edges.values()
+            for edge in edges
             if edge.junction_involved
         )
 
         logger.info(
-            f"junction_involved_edges={junction_edges}"
+            f"junction_involved_edges="
+            f"{junction_edges}"
         )
 
         for node_key in branching[:5]:
@@ -134,12 +192,14 @@ class TopologyDiagnosticNode(Node):
 
             for edge_key in graph.outgoing[node_key]:
                 edge = graph.edges[edge_key]
-                targets.append(str(edge.target))
+
+                targets.append(
+                    f"{edge.target}"
+                    f"(L={edge.length_m:.1f}m)"
+                )
 
             logger.info(
-                "branch "
-                f"{node_key} "
-                "-> "
+                f"branch {node_key} -> "
                 + ", ".join(targets)
             )
 

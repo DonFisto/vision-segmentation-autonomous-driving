@@ -8,7 +8,7 @@ carla_topology_adapter.py.
 
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 
 @dataclass(frozen=True, order=True)
@@ -19,6 +19,23 @@ class TopologyNodeKey:
     section_id: int
     lane_id: int
     s_cm: int
+
+
+@dataclass(frozen=True)
+class TopologyPoint:
+    """One sampled point along nominal CARLA/OpenDRIVE geometry."""
+
+    x: float
+    y: float
+    z: float
+    yaw_deg: float
+
+    road_id: int
+    section_id: int
+    lane_id: int
+    s_m: float
+
+    is_junction: bool
 
 
 @dataclass(frozen=True)
@@ -47,18 +64,22 @@ class TopologyEdgeKey:
 
 @dataclass(frozen=True)
 class TopologyEdge:
-    """Directed connection between two topology endpoints."""
+    """Directed global-routing connection."""
 
     key: TopologyEdgeKey
 
     source: TopologyNodeKey
     target: TopologyNodeKey
 
-    # Diagnostic only for now.
-    #
-    # This is straight-line endpoint distance, NOT the final
-    # routing cost. Later we will sample the actual centerline
-    # geometry and compute its arc length.
+    # Ordered nominal map geometry including the exact
+    # topology entry and exit endpoints.
+    geometry: Tuple[TopologyPoint, ...]
+
+    # Polyline arc length of geometry.
+    # This becomes the initial routing cost.
+    length_m: float
+
+    # Straight-line chord retained for diagnostics only.
     endpoint_distance_m: float
 
     entry_is_junction: bool
@@ -73,12 +94,7 @@ class TopologyEdge:
 
 
 class DirectedTopologyGraph:
-    """Small explicit directed graph for global routing.
-
-    This deliberately avoids NetworkX so graph semantics remain
-    visible and later Dijkstra/A* implementations operate directly
-    on project-owned data structures.
-    """
+    """Explicit project-owned directed graph."""
 
     NODE_POSITION_TOLERANCE_M = 0.05
 
@@ -162,6 +178,17 @@ class DirectedTopologyGraph:
             raise ValueError(
                 "Duplicate directed topology edge: "
                 f"{edge.key}"
+            )
+
+        if len(edge.geometry) < 2:
+            raise ValueError(
+                "Topology edge must contain at least "
+                "entry and exit geometry samples."
+            )
+
+        if edge.length_m < 0.0:
+            raise ValueError(
+                "Topology edge length cannot be negative."
             )
 
         self.add_node(source_node)
