@@ -12,6 +12,10 @@ from rclpy.node import Node
 from global_route_planner.carla_topology_adapter import (
     build_topology_graph,
 )
+from global_route_planner.connectivity import (
+    strongly_connected_components,
+    weakly_connected_components,
+)
 from global_route_planner.routing import (
     dijkstra_shortest_path,
 )
@@ -151,6 +155,34 @@ class RoutingDiagnosticNode(Node):
                 "Topology graph is empty."
             )
 
+        weak_components = (
+            weakly_connected_components(
+                graph
+            )
+        )
+
+        strong_components = (
+            strongly_connected_components(
+                graph
+            )
+        )
+
+        weak_sizes = sorted(
+            (
+                len(component)
+                for component in weak_components
+            ),
+            reverse=True,
+        )
+
+        strong_sizes = sorted(
+            (
+                len(component)
+                for component in strong_components
+            ),
+            reverse=True,
+        )
+
         # Deterministic semantic start node.
         start = min(
             graph.nodes.keys()
@@ -259,6 +291,18 @@ class RoutingDiagnosticNode(Node):
             "graph "
             f"nodes={len(graph.nodes)} "
             f"edges={len(graph.edges)}"
+        )
+
+        logger.info(
+            "weak_connectivity "
+            f"components={len(weak_components)} "
+            f"sizes={weak_sizes}"
+        )
+
+        logger.info(
+            "strong_connectivity "
+            f"components={len(strong_components)} "
+            f"largest_sizes={strong_sizes[:10]}"
         )
 
         logger.info(
