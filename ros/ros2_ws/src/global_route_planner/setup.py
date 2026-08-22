@@ -54,6 +54,11 @@ setup(
                 "global_route_planner."
                 "live_route_diagnostic_node:main"
             ),
+            (
+                "global_route_planner_node = "
+                "global_route_planner."
+                "global_route_planner_node:main"
+            ),
         ],
     },
 )
