@@ -7,6 +7,10 @@ from autonomy_interfaces.msg import RoutePlan
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path
 
+from global_route_planner.global_segment_ids import (
+    route_lane_segment_ids,
+)
+
 
 def stable_map_revision(
     map_name: str,
@@ -243,9 +247,13 @@ def build_route_plan_message(
         path
     )
 
-    # Stable uint64 global segment IDs are deliberately
-    # deferred to a separate interface decision.
-    message.lane_segment_ids = []
+    message.lane_segment_ids = (
+        route_lane_segment_ids(
+            routing_graph=graph,
+            route=route,
+            map_revision=map_revision,
+        )
+    )
 
     message.status = (
         RoutePlan.STATUS_VALID

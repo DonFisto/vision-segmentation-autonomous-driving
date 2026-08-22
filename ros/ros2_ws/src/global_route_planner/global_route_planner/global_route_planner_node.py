@@ -26,6 +26,9 @@ from global_route_planner.carla_routing_graph_adapter import (
 from global_route_planner.carla_topology_adapter import (
     build_topology_graph,
 )
+from global_route_planner.global_segment_ids import (
+    topology_segment_id_map,
+)
 from global_route_planner.route_plan_builder import (
     build_route_plan_message,
     stable_map_revision,
@@ -248,6 +251,19 @@ class GlobalRoutePlannerNode(Node):
                     self._carla_map.to_opendrive()
                 ),
             )
+        )
+
+        topology_segment_ids = (
+            topology_segment_id_map(
+                topology_graph=topology_graph,
+                map_revision=self._map_revision,
+            )
+        )
+
+        self.get_logger().info(
+            "global_segment_ids "
+            f"unique={len(set(topology_segment_ids.values()))} "
+            f"topology_edges={len(topology_graph.edges)}"
         )
 
         spawn_points = (
@@ -485,7 +501,8 @@ class GlobalRoutePlannerNode(Node):
             f"path_poses="
             f"{len(route.node_path)} "
             f"lane_changes={lane_changes} "
-            f"lane_segment_ids=0 "
+            f"lane_segment_ids="
+            f"{len(message_out.lane_segment_ids)} "
             f"status="
             f"{message_out.status} "
             f"confidence="
