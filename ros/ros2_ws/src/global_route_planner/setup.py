@@ -44,6 +44,11 @@ setup(
                 "global_route_planner."
                 "routing_graph_diagnostic_node:main"
             ),
+            (
+                "route_association_diagnostic_node = "
+                "global_route_planner."
+                "route_association_diagnostic_node:main"
+            ),
         ],
     },
 )

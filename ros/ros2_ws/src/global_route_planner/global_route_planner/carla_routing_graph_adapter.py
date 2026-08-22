@@ -1,7 +1,5 @@
 """Construct sampled route-search connectivity from CARLA topology."""
 
-from bisect import bisect_left
-from collections import defaultdict
 from dataclasses import dataclass
 import math
 
@@ -14,6 +12,10 @@ from global_route_planner.routing_graph import (
     RoutingEdgeType,
     RoutingNode,
     RoutingNodeKey,
+)
+
+from global_route_planner.routing_graph_index import (
+    RoutingGraphIndex,
 )
 
 
@@ -88,88 +90,6 @@ def node_distance_m(
         + dz * dz
     )
 
-
-def lane_identity(
-    road_id,
-    section_id,
-    lane_id,
-):
-    return (
-        int(road_id),
-        int(section_id),
-        int(lane_id),
-    )
-
-
-def nearest_lane_node(
-    lane_nodes,
-    lane_s_values,
-    lane,
-    target_s_m,
-    max_error_m,
-):
-    """Return nearest sampled node on a semantic lane."""
-
-    keys = lane_nodes.get(
-        lane
-    )
-
-    values = lane_s_values.get(
-        lane
-    )
-
-    if not keys or not values:
-        return None
-
-    target_s_cm = int(
-        round(
-            float(target_s_m)
-            * 100.0
-        )
-    )
-
-    index = bisect_left(
-        values,
-        target_s_cm,
-    )
-
-    candidate_indices = []
-
-    if index < len(keys):
-        candidate_indices.append(
-            index
-        )
-
-    if index > 0:
-        candidate_indices.append(
-            index - 1
-        )
-
-    if not candidate_indices:
-        return None
-
-    best_index = min(
-        candidate_indices,
-        key=lambda candidate: abs(
-            values[candidate]
-            - target_s_cm
-        ),
-    )
-
-    error_m = (
-        abs(
-            values[best_index]
-            - target_s_cm
-        )
-        / 100.0
-    )
-
-    if error_m > max_error_m:
-        return None
-
-    return keys[
-        best_index
-    ]
 
 
 def build_routing_graph(
@@ -282,39 +202,12 @@ def build_routing_graph(
             lane_follow_edges_added += 1
 
     # ---------------------------------------------------------
-    # 3. Build a semantic lane index for lateral matching.
+    # 3. Build reusable semantic lane/s index.
     # ---------------------------------------------------------
 
-    lane_nodes = defaultdict(
-        list
+    routing_index = RoutingGraphIndex(
+        graph
     )
-
-    for node_key in graph.nodes:
-        lane = lane_identity(
-            node_key.road_id,
-            node_key.section_id,
-            node_key.lane_id,
-        )
-
-        lane_nodes[
-            lane
-        ].append(
-            node_key
-        )
-
-    lane_s_values = {}
-
-    for lane, keys in lane_nodes.items():
-        keys.sort(
-            key=lambda key: key.s_cm
-        )
-
-        lane_s_values[
-            lane
-        ] = [
-            key.s_cm
-            for key in keys
-        ]
 
     # ---------------------------------------------------------
     # 4. Add legal lateral transitions.
@@ -417,27 +310,27 @@ def build_routing_graph(
                     lane_change_target_misses += 1
                     continue
 
-                target_lane = lane_identity(
-                    neighbor.road_id,
-                    neighbor.section_id,
-                    neighbor.lane_id,
+                target_match = (
+                    routing_index.nearest_on_lane(
+                        road_id=neighbor.road_id,
+                        section_id=neighbor.section_id,
+                        lane_id=neighbor.lane_id,
+                        target_s_m=float(
+                            neighbor.s
+                        ),
+                        max_s_error_m=(
+                            max_lane_change_s_error_m
+                        ),
+                    )
                 )
 
-                target_key = nearest_lane_node(
-                    lane_nodes=lane_nodes,
-                    lane_s_values=lane_s_values,
-                    lane=target_lane,
-                    target_s_m=float(
-                        neighbor.s
-                    ),
-                    max_error_m=(
-                        max_lane_change_s_error_m
-                    ),
-                )
-
-                if target_key is None:
+                if target_match is None:
                     lane_change_target_misses += 1
                     continue
+
+                target_key = (
+                    target_match.node_key
+                )
 
                 if target_key == source_key:
                     continue
