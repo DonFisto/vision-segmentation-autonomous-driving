@@ -1,4 +1,4 @@
-"""Shortest-path algorithms for the global topology graph.
+"""Shortest-path algorithms for directed routing graphs.
 
 This module intentionally contains no ROS or CARLA dependencies.
 """
@@ -7,12 +7,23 @@ from dataclasses import dataclass
 import heapq
 import math
 from itertools import count
-from typing import Dict, Tuple
+from typing import (
+    Dict,
+    Generic,
+    Hashable,
+    Tuple,
+    TypeVar,
+)
 
-from global_route_planner.topology import (
-    DirectedTopologyGraph,
-    TopologyEdgeKey,
-    TopologyNodeKey,
+
+NodeKeyT = TypeVar(
+    "NodeKeyT",
+    bound=Hashable,
+)
+
+EdgeKeyT = TypeVar(
+    "EdgeKeyT",
+    bound=Hashable,
 )
 
 
@@ -21,27 +32,40 @@ class NoPathError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class ShortestPathResult:
+class ShortestPathResult(
+    Generic[
+        NodeKeyT,
+        EdgeKeyT,
+    ]
+):
     """Result of one graph shortest-path query."""
 
-    start: TopologyNodeKey
-    goal: TopologyNodeKey
+    start: NodeKeyT
+    goal: NodeKeyT
 
-    node_path: Tuple[TopologyNodeKey, ...]
-    edge_path: Tuple[TopologyEdgeKey, ...]
+    node_path: Tuple[
+        NodeKeyT,
+        ...,
+    ]
+
+    edge_path: Tuple[
+        EdgeKeyT,
+        ...,
+    ]
 
     total_cost_m: float
     settled_nodes: int
 
 
 def dijkstra_shortest_path(
-    graph: DirectedTopologyGraph,
-    start: TopologyNodeKey,
-    goal: TopologyNodeKey,
+    graph,
+    start: NodeKeyT,
+    goal: NodeKeyT,
 ) -> ShortestPathResult:
-    """Compute a minimum-distance directed path.
+    """Compute a minimum-cost directed path.
 
-    Edge cost is TopologyEdge.length_m.
+    Every graph edge must expose a non-negative
+    ``cost_m`` attribute.
     """
 
     if start not in graph.nodes:
@@ -65,21 +89,18 @@ def dijkstra_shortest_path(
         )
 
     distances: Dict[
-        TopologyNodeKey,
+        NodeKeyT,
         float,
     ] = {
         start: 0.0,
     }
 
-    predecessor_edge: Dict[
-        TopologyNodeKey,
-        TopologyEdgeKey,
-    ] = {}
+    predecessor_edge = {}
 
     settled = set()
 
-    # Sequence number prevents heap comparisons from depending
-    # on node identity when two path costs are equal.
+    # Prevent heap tie-breaking from depending on
+    # the node-key implementation.
     sequence = count()
 
     queue = [
@@ -91,7 +112,11 @@ def dijkstra_shortest_path(
     ]
 
     while queue:
-        current_cost, _, current = heapq.heappop(
+        (
+            current_cost,
+            _,
+            current,
+        ) = heapq.heappop(
             queue
         )
 
@@ -106,7 +131,9 @@ def dijkstra_shortest_path(
         if current_cost > known_cost:
             continue
 
-        settled.add(current)
+        settled.add(
+            current
+        )
 
         if current == goal:
             break
@@ -115,9 +142,15 @@ def dijkstra_shortest_path(
             current,
             (),
         ):
-            edge = graph.edges[edge_key]
+            edge = graph.edges[
+                edge_key
+            ]
 
-            if edge.length_m < 0.0:
+            edge_cost_m = float(
+                edge.cost_m
+            )
+
+            if edge_cost_m < 0.0:
                 raise ValueError(
                     "Dijkstra requires non-negative "
                     f"edge costs: {edge_key}"
@@ -125,7 +158,7 @@ def dijkstra_shortest_path(
 
             candidate_cost = (
                 current_cost
-                + edge.length_m
+                + edge_cost_m
             )
 
             old_cost = distances.get(
@@ -134,9 +167,9 @@ def dijkstra_shortest_path(
             )
 
             if candidate_cost < old_cost:
-                distances[edge.target] = (
-                    candidate_cost
-                )
+                distances[
+                    edge.target
+                ] = candidate_cost
 
                 predecessor_edge[
                     edge.target
@@ -168,24 +201,31 @@ def dijkstra_shortest_path(
 
         if edge_key is None:
             raise RuntimeError(
-                "Dijkstra predecessor chain is "
-                "incomplete."
+                "Dijkstra predecessor chain is incomplete."
             )
 
-        reversed_edges.append(edge_key)
+        reversed_edges.append(
+            edge_key
+        )
 
         current = graph.edges[
             edge_key
         ].source
 
     edge_path = tuple(
-        reversed(reversed_edges)
+        reversed(
+            reversed_edges
+        )
     )
 
-    node_path = [start]
+    node_path = [
+        start
+    ]
 
     for edge_key in edge_path:
-        edge = graph.edges[edge_key]
+        edge = graph.edges[
+            edge_key
+        ]
 
         if edge.source != node_path[-1]:
             raise RuntimeError(

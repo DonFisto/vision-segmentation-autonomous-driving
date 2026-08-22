@@ -86,6 +86,12 @@ class TopologyEdge:
     exit_is_junction: bool
 
     @property
+    def cost_m(self) -> float:
+        """Default routing cost for a topology edge."""
+
+        return self.length_m
+
+    @property
     def junction_involved(self) -> bool:
         return (
             self.entry_is_junction
