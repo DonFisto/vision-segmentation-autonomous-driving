@@ -8,6 +8,7 @@ import heapq
 import math
 from itertools import count
 from typing import (
+    Callable,
     Dict,
     Generic,
     Hashable,
@@ -244,4 +245,251 @@ def dijkstra_shortest_path(
         edge_path=edge_path,
         total_cost_m=distances[goal],
         settled_nodes=len(settled),
+    )
+
+
+
+def a_star_shortest_path(
+    graph,
+    start: NodeKeyT,
+    goal: NodeKeyT,
+    heuristic: Callable[
+        [NodeKeyT],
+        float,
+    ],
+) -> ShortestPathResult:
+    """Compute a minimum-cost directed path with A*.
+
+    ``heuristic(node)`` must be a non-negative admissible
+    lower bound on the remaining cost to ``goal``.
+
+    Nodes may be reopened if a lower g-cost is discovered,
+    allowing correct use with admissible heuristics that are
+    not necessarily consistent.
+    """
+
+    if start not in graph.nodes:
+        raise KeyError(
+            f"Start node is not present in graph: {start}"
+        )
+
+    if goal not in graph.nodes:
+        raise KeyError(
+            f"Goal node is not present in graph: {goal}"
+        )
+
+    if start == goal:
+        return ShortestPathResult(
+            start=start,
+            goal=goal,
+            node_path=(start,),
+            edge_path=(),
+            total_cost_m=0.0,
+            settled_nodes=1,
+        )
+
+    def checked_heuristic(
+        node,
+    ) -> float:
+        value = float(
+            heuristic(node)
+        )
+
+        if not math.isfinite(value):
+            raise ValueError(
+                "A* heuristic must be finite: "
+                f"node={node} value={value}"
+            )
+
+        if value < 0.0:
+            raise ValueError(
+                "A* heuristic must be non-negative: "
+                f"node={node} value={value}"
+            )
+
+        return value
+
+    g_scores: Dict[
+        NodeKeyT,
+        float,
+    ] = {
+        start: 0.0,
+    }
+
+    predecessor_edge = {}
+
+    # Nodes currently closed by A*. A node is removed if a
+    # better route reopens it.
+    closed = set()
+
+    # Unique nodes expanded at least once. This keeps
+    # settled_nodes comparable with the Dijkstra diagnostic.
+    expanded = set()
+
+    sequence = count()
+
+    queue = [
+        (
+            checked_heuristic(
+                start
+            ),
+            0.0,
+            next(sequence),
+            start,
+        )
+    ]
+
+    while queue:
+        (
+            _,
+            current_g,
+            _,
+            current,
+        ) = heapq.heappop(
+            queue
+        )
+
+        if current in closed:
+            continue
+
+        known_g = g_scores.get(
+            current,
+            math.inf,
+        )
+
+        if current_g > known_g:
+            continue
+
+        closed.add(
+            current
+        )
+
+        expanded.add(
+            current
+        )
+
+        if current == goal:
+            break
+
+        for edge_key in graph.outgoing.get(
+            current,
+            (),
+        ):
+            edge = graph.edges[
+                edge_key
+            ]
+
+            edge_cost_m = float(
+                edge.cost_m
+            )
+
+            if edge_cost_m < 0.0:
+                raise ValueError(
+                    "A* requires non-negative "
+                    f"edge costs: {edge_key}"
+                )
+
+            candidate_g = (
+                current_g
+                + edge_cost_m
+            )
+
+            old_g = g_scores.get(
+                edge.target,
+                math.inf,
+            )
+
+            if candidate_g >= old_g:
+                continue
+
+            g_scores[
+                edge.target
+            ] = candidate_g
+
+            predecessor_edge[
+                edge.target
+            ] = edge_key
+
+            if edge.target in closed:
+                closed.remove(
+                    edge.target
+                )
+
+            target_h = (
+                checked_heuristic(
+                    edge.target
+                )
+            )
+
+            heapq.heappush(
+                queue,
+                (
+                    candidate_g
+                    + target_h,
+                    candidate_g,
+                    next(sequence),
+                    edge.target,
+                ),
+            )
+
+    if goal not in closed:
+        raise NoPathError(
+            "No directed path exists from "
+            f"{start} to {goal}"
+        )
+
+    reversed_edges = []
+
+    current = goal
+
+    while current != start:
+        edge_key = predecessor_edge.get(
+            current
+        )
+
+        if edge_key is None:
+            raise RuntimeError(
+                "A* predecessor chain is incomplete."
+            )
+
+        reversed_edges.append(
+            edge_key
+        )
+
+        current = graph.edges[
+            edge_key
+        ].source
+
+    edge_path = tuple(
+        reversed(
+            reversed_edges
+        )
+    )
+
+    node_path = [
+        start
+    ]
+
+    for edge_key in edge_path:
+        edge = graph.edges[
+            edge_key
+        ]
+
+        if edge.source != node_path[-1]:
+            raise RuntimeError(
+                "Reconstructed A* route is "
+                "not topologically continuous."
+            )
+
+        node_path.append(
+            edge.target
+        )
+
+    return ShortestPathResult(
+        start=start,
+        goal=goal,
+        node_path=tuple(node_path),
+        edge_path=edge_path,
+        total_cost_m=g_scores[goal],
+        settled_nodes=len(expanded),
     )

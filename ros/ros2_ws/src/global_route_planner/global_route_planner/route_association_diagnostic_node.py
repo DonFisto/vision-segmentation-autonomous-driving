@@ -20,6 +20,7 @@ from global_route_planner.carla_topology_adapter import (
     build_topology_graph,
 )
 from global_route_planner.routing import (
+    a_star_shortest_path,
     dijkstra_shortest_path,
 )
 from global_route_planner.routing_graph import (
@@ -318,6 +319,84 @@ class RouteAssociationDiagnosticNode(Node):
             )
         )
 
+        def goal_heuristic(
+            node,
+        ):
+            return node_distance_m(
+                graph,
+                node,
+                goal.node_key,
+            )
+
+        astar_route = (
+            a_star_shortest_path(
+                graph=graph,
+                start=start.node_key,
+                goal=goal.node_key,
+                heuristic=goal_heuristic,
+            )
+        )
+
+        if not math.isclose(
+            astar_route.total_cost_m,
+            route.total_cost_m,
+            rel_tol=1e-9,
+            abs_tol=1e-6,
+        ):
+            raise RuntimeError(
+                "Associated-route A* and Dijkstra "
+                "costs disagree: "
+                f"dijkstra={route.total_cost_m:.6f} "
+                f"astar={astar_route.total_cost_m:.6f}"
+            )
+
+        astar_summed_cost_m = sum(
+            graph.edges[
+                edge_key
+            ].cost_m
+            for edge_key
+            in astar_route.edge_path
+        )
+
+        if not math.isclose(
+            astar_route.total_cost_m,
+            astar_summed_cost_m,
+            rel_tol=1e-9,
+            abs_tol=1e-6,
+        ):
+            raise RuntimeError(
+                "Associated A* route cost does not "
+                "equal its edge-cost sum."
+            )
+
+        for index, edge_key in enumerate(
+            astar_route.edge_path
+        ):
+            edge = graph.edges[
+                edge_key
+            ]
+
+            if (
+                edge.source
+                != astar_route.node_path[index]
+                or edge.target
+                != astar_route.node_path[index + 1]
+            ):
+                raise RuntimeError(
+                    "Associated A* route "
+                    "continuity failed."
+                )
+
+        astar_lane_changes = sum(
+            1
+            for edge_key
+            in astar_route.edge_path
+            if graph.edges[
+                edge_key
+            ].transition_type
+            != RoutingEdgeType.LANE_FOLLOW
+        )
+
         summed_cost_m = sum(
             graph.edges[
                 edge_key
@@ -458,6 +537,39 @@ class RouteAssociationDiagnosticNode(Node):
             f"lane_changes={lane_changes} "
             f"settled={route.settled_nodes} "
             "continuous_cost=true"
+        )
+
+        settled_reduction = (
+            route.settled_nodes
+            - astar_route.settled_nodes
+        )
+
+        settled_reduction_percent = (
+            100.0
+            * settled_reduction
+            / route.settled_nodes
+        )
+
+        logger.info(
+            "associated_route_a_star "
+            f"cost_m={astar_route.total_cost_m:.3f} "
+            f"nodes={len(astar_route.node_path)} "
+            f"edges={len(astar_route.edge_path)} "
+            f"lane_changes={astar_lane_changes} "
+            f"settled={astar_route.settled_nodes} "
+            "continuous_cost=true"
+        )
+
+        logger.info(
+            "associated_search_comparison "
+            "cost_equal=true "
+            f"same_edge_path="
+            f"{astar_route.edge_path == route.edge_path} "
+            f"dijkstra_settled={route.settled_nodes} "
+            f"astar_settled={astar_route.settled_nodes} "
+            f"settled_reduction={settled_reduction} "
+            f"settled_reduction_percent="
+            f"{settled_reduction_percent:.2f}"
         )
 
         logger.info(

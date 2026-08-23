@@ -23,6 +23,7 @@ from global_route_planner.connectivity import (
     weakly_connected_components,
 )
 from global_route_planner.routing import (
+    a_star_shortest_path,
     dijkstra_shortest_path,
 )
 from global_route_planner.routing_graph import (
@@ -294,6 +295,138 @@ class RoutingGraphDiagnosticNode(Node):
             goal=goal,
         )
 
+        # -----------------------------------------------------
+        # Validate the geometric lower-bound assumption used
+        # by the Euclidean A* heuristic.
+        #
+        # For every routing edge:
+        #
+        #   cost(u,v) >= euclidean_distance(u,v)
+        #
+        # Together with the triangle inequality this makes
+        # Euclidean distance to the goal a consistent
+        # heuristic.
+        # -----------------------------------------------------
+
+        min_cost_minus_displacement_m = math.inf
+
+        for edge in graph.edges.values():
+            displacement_m = (
+                node_distance_m(
+                    graph,
+                    edge.source,
+                    edge.target,
+                )
+            )
+
+            slack_m = (
+                float(edge.cost_m)
+                - displacement_m
+            )
+
+            min_cost_minus_displacement_m = min(
+                min_cost_minus_displacement_m,
+                slack_m,
+            )
+
+            if slack_m < -1e-6:
+                raise RuntimeError(
+                    "Euclidean A* heuristic consistency "
+                    "assumption failed: "
+                    f"edge={edge.key} "
+                    f"cost_m={edge.cost_m:.6f} "
+                    f"displacement_m={displacement_m:.6f} "
+                    f"slack_m={slack_m:.6f}"
+                )
+
+        def goal_heuristic(
+            node,
+        ):
+            return node_distance_m(
+                graph,
+                node,
+                goal,
+            )
+
+        astar_route = (
+            a_star_shortest_path(
+                graph=graph,
+                start=start,
+                goal=goal,
+                heuristic=goal_heuristic,
+            )
+        )
+
+        if not math.isclose(
+            astar_route.total_cost_m,
+            route.total_cost_m,
+            rel_tol=1e-9,
+            abs_tol=1e-6,
+        ):
+            raise RuntimeError(
+                "A* and Dijkstra disagree on "
+                "minimum route cost: "
+                f"dijkstra={route.total_cost_m:.6f} "
+                f"astar={astar_route.total_cost_m:.6f}"
+            )
+
+        if (
+            astar_route.settled_nodes
+            > route.settled_nodes
+        ):
+            raise RuntimeError(
+                "A* settled more nodes than Dijkstra "
+                "for the diagnostic route: "
+                f"dijkstra={route.settled_nodes} "
+                f"astar={astar_route.settled_nodes}"
+            )
+
+        astar_summed_cost_m = sum(
+            graph.edges[
+                edge_key
+            ].cost_m
+            for edge_key
+            in astar_route.edge_path
+        )
+
+        if not math.isclose(
+            astar_route.total_cost_m,
+            astar_summed_cost_m,
+            rel_tol=1e-9,
+            abs_tol=1e-6,
+        ):
+            raise RuntimeError(
+                "A* cost does not equal "
+                "its edge-cost sum."
+            )
+
+        for index, edge_key in enumerate(
+            astar_route.edge_path
+        ):
+            edge = graph.edges[
+                edge_key
+            ]
+
+            if (
+                edge.source
+                != astar_route.node_path[index]
+                or edge.target
+                != astar_route.node_path[index + 1]
+            ):
+                raise RuntimeError(
+                    "A* route continuity failed."
+                )
+
+        astar_lane_changes = sum(
+            1
+            for edge_key
+            in astar_route.edge_path
+            if graph.edges[
+                edge_key
+            ].transition_type
+            != RoutingEdgeType.LANE_FOLLOW
+        )
+
         summed_cost_m = sum(
             graph.edges[
                 edge_key
@@ -369,6 +502,53 @@ class RoutingGraphDiagnosticNode(Node):
                 goal=lane_change_probe_edge.target,
             )
         )
+
+        def lane_change_probe_heuristic(
+            node,
+        ):
+            return node_distance_m(
+                graph,
+                node,
+                lane_change_probe_edge.target,
+            )
+
+        astar_lane_change_probe = (
+            a_star_shortest_path(
+                graph=graph,
+                start=lane_change_probe_edge.source,
+                goal=lane_change_probe_edge.target,
+                heuristic=(
+                    lane_change_probe_heuristic
+                ),
+            )
+        )
+
+        if not math.isclose(
+            astar_lane_change_probe.total_cost_m,
+            lane_change_probe.total_cost_m,
+            rel_tol=1e-9,
+            abs_tol=1e-6,
+        ):
+            raise RuntimeError(
+                "A* and Dijkstra disagree on "
+                "lane-change probe cost."
+            )
+
+        astar_probe_lane_changes = sum(
+            1
+            for edge_key
+            in astar_lane_change_probe.edge_path
+            if graph.edges[
+                edge_key
+            ].transition_type
+            != RoutingEdgeType.LANE_FOLLOW
+        )
+
+        if astar_probe_lane_changes < 1:
+            raise RuntimeError(
+                "A* lane-change probe did not use "
+                "a lateral routing transition."
+            )
 
         probe_lane_changes = sum(
             1
@@ -488,6 +668,57 @@ class RoutingGraphDiagnosticNode(Node):
             "route_validation "
             f"summed_cost_m={summed_cost_m:.3f} "
             "continuous=true"
+        )
+
+        logger.info(
+            "heuristic_consistency "
+            f"edges={len(graph.edges)} "
+            "violations=0 "
+            f"min_cost_minus_displacement_m="
+            f"{min_cost_minus_displacement_m:.6f}"
+        )
+
+        logger.info(
+            "a_star "
+            f"cost_m={astar_route.total_cost_m:.3f} "
+            f"nodes={len(astar_route.node_path)} "
+            f"edges={len(astar_route.edge_path)} "
+            f"lane_changes={astar_lane_changes} "
+            f"settled={astar_route.settled_nodes}"
+        )
+
+        settled_reduction = (
+            route.settled_nodes
+            - astar_route.settled_nodes
+        )
+
+        settled_reduction_percent = (
+            100.0
+            * settled_reduction
+            / route.settled_nodes
+        )
+
+        logger.info(
+            "search_comparison "
+            "cost_equal=true "
+            f"same_edge_path="
+            f"{astar_route.edge_path == route.edge_path} "
+            f"dijkstra_settled={route.settled_nodes} "
+            f"astar_settled={astar_route.settled_nodes} "
+            f"settled_reduction={settled_reduction} "
+            f"settled_reduction_percent="
+            f"{settled_reduction_percent:.2f}"
+        )
+
+        logger.info(
+            "a_star_lane_change_probe "
+            f"cost_m="
+            f"{astar_lane_change_probe.total_cost_m:.3f} "
+            f"edges="
+            f"{len(astar_lane_change_probe.edge_path)} "
+            f"lane_changes={astar_probe_lane_changes} "
+            f"settled="
+            f"{astar_lane_change_probe.settled_nodes}"
         )
 
         logger.info(

@@ -2,6 +2,8 @@
 
 """Publish global RoutePlan messages from live ego odometry."""
 
+import math
+
 import carla
 
 from autonomy_interfaces.msg import RoutePlan
@@ -36,7 +38,7 @@ from global_route_planner.route_plan_builder import (
 )
 from global_route_planner.routing import (
     NoPathError,
-    dijkstra_shortest_path,
+    a_star_shortest_path,
 )
 from global_route_planner.routing_graph import (
     RoutingEdgeType,
@@ -447,12 +449,45 @@ class GlobalRoutePlannerNode(Node):
         if goal is None:
             return
 
+        goal_node = self._graph.nodes[
+            goal.node_key
+        ]
+
+        def heuristic(
+            node_key,
+        ) -> float:
+            node = self._graph.nodes[
+                node_key
+            ]
+
+            dx = (
+                goal_node.x
+                - node.x
+            )
+
+            dy = (
+                goal_node.y
+                - node.y
+            )
+
+            dz = (
+                goal_node.z
+                - node.z
+            )
+
+            return math.sqrt(
+                dx * dx
+                + dy * dy
+                + dz * dz
+            )
+
         try:
             route = (
-                dijkstra_shortest_path(
+                a_star_shortest_path(
                     graph=self._graph,
                     start=start.node_key,
                     goal=goal.node_key,
+                    heuristic=heuristic,
                 )
             )
         except NoPathError as exc:
@@ -513,11 +548,13 @@ class GlobalRoutePlannerNode(Node):
 
         self.get_logger().info(
             "published_route_plan "
+            "search=a_star "
             f"reason={reason} "
             f"route_id={route_id} "
             f"start={start.node_key} "
             f"goal={goal.node_key} "
             f"cost_m={route.total_cost_m:.3f} "
+            f"settled={route.settled_nodes} "
             f"path_poses="
             f"{len(route.node_path)} "
             f"lane_changes={lane_changes} "
