@@ -33,6 +33,7 @@ from global_route_planner.global_segment_ids import (
     topology_segment_id_map,
 )
 from global_route_planner.route_plan_builder import (
+    build_invalid_route_plan_message,
     build_route_plan_message,
     stable_map_revision,
 )
@@ -491,10 +492,55 @@ class GlobalRoutePlannerNode(Node):
                 )
             )
         except NoPathError as exc:
-            self.get_logger().error(
-                "Route search failed "
-                f"reason={reason}: {exc}"
+            route_id = (
+                self._next_route_id()
             )
+
+            stamp = (
+                self.get_clock()
+                .now()
+                .to_msg()
+            )
+
+            message_out = (
+                build_invalid_route_plan_message(
+                    start_association=start,
+                    goal_association=goal,
+                    route_id=route_id,
+                    map_revision=(
+                        self._map_revision
+                    ),
+                    stamp=stamp,
+                    frame_id=self._frame_id,
+                )
+            )
+
+            self._route_publisher.publish(
+                message_out
+            )
+
+            # Avoid retrying the same failed query at
+            # odometry frequency. A new goal or movement to
+            # another sampled start node triggers another search.
+            self._last_planned_start_node = (
+                start.node_key
+            )
+
+            self.get_logger().error(
+                "published_route_plan "
+                "search=a_star "
+                f"reason={reason} "
+                f"route_id={route_id} "
+                f"start={start.node_key} "
+                f"goal={goal.node_key} "
+                "no_path=true "
+                "path_poses=0 "
+                "lane_segment_ids=0 "
+                f"status={message_out.status} "
+                "confidence=0.000 "
+                f"error={exc}"
+            )
+
             return
 
         route_id = (

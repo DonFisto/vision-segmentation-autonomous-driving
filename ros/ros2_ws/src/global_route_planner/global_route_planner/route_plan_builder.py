@@ -277,3 +277,72 @@ def build_route_plan_message(
     )
 
     return message
+
+
+def build_invalid_route_plan_message(
+    start_association,
+    goal_association,
+    route_id: int,
+    map_revision: int,
+    stamp,
+    frame_id: str,
+) -> RoutePlan:
+    """Build a RoutePlan representing a failed route search.
+
+    Start and goal remain the successfully map-associated poses,
+    while route geometry and segment provenance are empty.
+
+    Confidence is zero because there is no usable route.
+    """
+
+    message = RoutePlan()
+
+    message.header.stamp = stamp
+    message.header.frame_id = (
+        frame_id
+    )
+
+    message.route_id = int(
+        route_id
+    )
+
+    message.map_revision = int(
+        map_revision
+    )
+
+    message.start = (
+        pose_from_association(
+            start_association,
+            stamp,
+            frame_id,
+        )
+    )
+
+    message.goal = (
+        pose_from_association(
+            goal_association,
+            stamp,
+            frame_id,
+        )
+    )
+
+    path = Path()
+
+    path.header.stamp = stamp
+    path.header.frame_id = (
+        frame_id
+    )
+
+    message.coarse_reference_path = (
+        path
+    )
+
+    message.lane_segment_ids = []
+
+    message.status = (
+        RoutePlan.STATUS_INVALID
+    )
+
+    message.confidence = 0.0
+
+    return message
