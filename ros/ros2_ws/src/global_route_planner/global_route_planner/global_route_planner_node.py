@@ -5,6 +5,7 @@
 import carla
 
 from autonomy_interfaces.msg import RoutePlan
+from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
 import rclpy
 from rclpy.node import Node
@@ -108,11 +109,9 @@ class GlobalRoutePlannerNode(Node):
             "carla_world",
         )
 
-        # Temporary goal source for this milestone.
-        # A dedicated goal interface comes later.
         self.declare_parameter(
-            "goal_spawn_index",
-            44,
+            "goal_topic",
+            "/planning/goal",
         )
 
         host = str(
@@ -181,14 +180,19 @@ class GlobalRoutePlannerNode(Node):
             ).value
         )
 
-        goal_spawn_index = int(
+        goal_topic = str(
             self.get_parameter(
-                "goal_spawn_index"
+                "goal_topic"
             ).value
         )
 
         self._route_id = 0
-        self._last_start_node = None
+
+        self._latest_start_association = None
+        self._last_planned_start_node = None
+        self._goal_association = None
+
+        self._waiting_for_goal_logged = False
 
         self.get_logger().info(
             f"Connecting to CARLA at "
@@ -266,48 +270,6 @@ class GlobalRoutePlannerNode(Node):
             f"topology_edges={len(topology_graph.edges)}"
         )
 
-        spawn_points = (
-            self._carla_map.get_spawn_points()
-        )
-
-        if (
-            goal_spawn_index < 0
-            or goal_spawn_index
-            >= len(spawn_points)
-        ):
-            raise ValueError(
-                "goal_spawn_index outside "
-                f"[0, {len(spawn_points) - 1}]: "
-                f"{goal_spawn_index}"
-            )
-
-        self._goal_spawn_index = (
-            goal_spawn_index
-        )
-
-        goal_location = (
-            spawn_points[
-                goal_spawn_index
-            ].location
-        )
-
-        self._goal_association = (
-            associate_carla_world_position(
-                carla_map=self._carla_map,
-                routing_graph=self._graph,
-                routing_index=self._routing_index,
-                x=goal_location.x,
-                y=goal_location.y,
-                z=goal_location.z,
-                max_projection_distance_m=(
-                    self._max_projection_distance_m
-                ),
-                max_sample_s_error_m=(
-                    self._max_association_s_error_m
-                ),
-            )
-        )
-
         route_qos = QoSProfile(
             history=(
                 QoSHistoryPolicy.KEEP_LAST
@@ -338,6 +300,15 @@ class GlobalRoutePlannerNode(Node):
             )
         )
 
+        self._goal_subscription = (
+            self.create_subscription(
+                PoseStamped,
+                goal_topic,
+                self._goal_callback,
+                10,
+            )
+        )
+
         self.get_logger().info(
             f"map={self._carla_map.name} "
             f"map_revision={self._map_revision}"
@@ -350,9 +321,10 @@ class GlobalRoutePlannerNode(Node):
         )
 
         self.get_logger().info(
-            "goal "
-            f"spawn_index={goal_spawn_index} "
-            f"node={self._goal_association.node_key}"
+            "goal_input "
+            f"topic={goal_topic} "
+            "type=geometry_msgs/PoseStamped "
+            "orientation_constraint=false"
         )
 
         self.get_logger().info(
@@ -373,55 +345,106 @@ class GlobalRoutePlannerNode(Node):
 
         return self._route_id
 
-    def _odom_callback(
+    def _associate_position(
         self,
-        message: Odometry,
+        position,
+    ):
+        """Associate one carla_world position with routing state."""
+
+        return associate_carla_world_position(
+            carla_map=self._carla_map,
+            routing_graph=self._graph,
+            routing_index=self._routing_index,
+            x=position.x,
+            y=position.y,
+            z=position.z,
+            max_projection_distance_m=(
+                self._max_projection_distance_m
+            ),
+            max_sample_s_error_m=(
+                self._max_association_s_error_m
+            ),
+        )
+
+    def _goal_callback(
+        self,
+        message: PoseStamped,
     ) -> None:
+        """Accept a new global mission goal."""
+
         if (
             message.header.frame_id
             != self._frame_id
         ):
             self.get_logger().error(
-                "Ignoring odometry with frame "
+                "Rejecting goal with frame "
                 f"'{message.header.frame_id}'; "
-                f"expected '{self._frame_id}'"
+                f"expected '{self._frame_id}'. "
+                "Previous valid goal remains active."
             )
             return
 
-        position = (
-            message.pose.pose.position
-        )
-
         try:
-            start = (
-                associate_carla_world_position(
-                    carla_map=self._carla_map,
-                    routing_graph=self._graph,
-                    routing_index=self._routing_index,
-                    x=position.x,
-                    y=position.y,
-                    z=position.z,
-                    max_projection_distance_m=(
-                        self._max_projection_distance_m
-                    ),
-                    max_sample_s_error_m=(
-                        self._max_association_s_error_m
-                    ),
-                )
+            goal = self._associate_position(
+                message.pose.position
             )
         except RouteAssociationError as exc:
             self.get_logger().error(
-                "Start association failed: "
-                f"{exc}"
+                "Rejecting goal: "
+                f"{exc}. "
+                "Previous valid goal remains active."
             )
             return
 
-        # Avoid running Dijkstra at the odometry frequency.
-        # Replan when association moves to a new sampled state.
+        self._goal_association = goal
+
+        self._waiting_for_goal_logged = False
+
+        self.get_logger().info(
+            "accepted_goal "
+            f"requested_x="
+            f"{message.pose.position.x:.3f} "
+            f"requested_y="
+            f"{message.pose.position.y:.3f} "
+            f"requested_z="
+            f"{message.pose.position.z:.3f} "
+            f"node={goal.node_key} "
+            f"projection_m="
+            f"{goal.projection_distance_m:.3f} "
+            f"sample_s_error_m="
+            f"{goal.sample_s_error_m:.3f} "
+            "orientation_constraint=false"
+        )
+
         if (
-            start.node_key
-            == self._last_start_node
+            self._latest_start_association
+            is None
         ):
+            self.get_logger().info(
+                "Goal accepted; waiting for "
+                "ego odometry before routing."
+            )
+            return
+
+        # A newly accepted goal always triggers a route,
+        # even if the ego remains on the same sampled node.
+        self._publish_route(
+            start=(
+                self._latest_start_association
+            ),
+            reason="new_goal",
+        )
+
+    def _publish_route(
+        self,
+        start,
+        reason: str,
+    ) -> None:
+        """Search and publish one route from start to current goal."""
+
+        goal = self._goal_association
+
+        if goal is None:
             return
 
         try:
@@ -429,14 +452,13 @@ class GlobalRoutePlannerNode(Node):
                 dijkstra_shortest_path(
                     graph=self._graph,
                     start=start.node_key,
-                    goal=(
-                        self._goal_association.node_key
-                    ),
+                    goal=goal.node_key,
                 )
             )
         except NoPathError as exc:
             self.get_logger().error(
-                f"Route search failed: {exc}"
+                "Route search failed "
+                f"reason={reason}: {exc}"
             )
             return
 
@@ -455,9 +477,7 @@ class GlobalRoutePlannerNode(Node):
                 graph=self._graph,
                 route=route,
                 start_association=start,
-                goal_association=(
-                    self._goal_association
-                ),
+                goal_association=goal,
                 route_id=route_id,
                 map_revision=(
                     self._map_revision
@@ -477,7 +497,7 @@ class GlobalRoutePlannerNode(Node):
             message_out
         )
 
-        self._last_start_node = (
+        self._last_planned_start_node = (
             start.node_key
         )
 
@@ -493,20 +513,75 @@ class GlobalRoutePlannerNode(Node):
 
         self.get_logger().info(
             "published_route_plan "
+            f"reason={reason} "
             f"route_id={route_id} "
             f"start={start.node_key} "
-            f"goal="
-            f"{self._goal_association.node_key} "
+            f"goal={goal.node_key} "
             f"cost_m={route.total_cost_m:.3f} "
             f"path_poses="
             f"{len(route.node_path)} "
             f"lane_changes={lane_changes} "
             f"lane_segment_ids="
             f"{len(message_out.lane_segment_ids)} "
-            f"status="
-            f"{message_out.status} "
+            f"status={message_out.status} "
             f"confidence="
             f"{message_out.confidence:.3f}"
+        )
+
+    def _odom_callback(
+        self,
+        message: Odometry,
+    ) -> None:
+        """Update live start state and replan when it advances."""
+
+        if (
+            message.header.frame_id
+            != self._frame_id
+        ):
+            self.get_logger().error(
+                "Ignoring odometry with frame "
+                f"'{message.header.frame_id}'; "
+                f"expected '{self._frame_id}'"
+            )
+            return
+
+        try:
+            start = self._associate_position(
+                message.pose.pose.position
+            )
+        except RouteAssociationError as exc:
+            self.get_logger().error(
+                "Start association failed: "
+                f"{exc}"
+            )
+            return
+
+        self._latest_start_association = (
+            start
+        )
+
+        if self._goal_association is None:
+            if not self._waiting_for_goal_logged:
+                self.get_logger().info(
+                    "start_ready "
+                    f"node={start.node_key} "
+                    "waiting_for_goal=true"
+                )
+
+                self._waiting_for_goal_logged = True
+
+            return
+
+        # Do not run Dijkstra at odometry frequency.
+        if (
+            start.node_key
+            == self._last_planned_start_node
+        ):
+            return
+
+        self._publish_route(
+            start=start,
+            reason="start_node_changed",
         )
 
 
