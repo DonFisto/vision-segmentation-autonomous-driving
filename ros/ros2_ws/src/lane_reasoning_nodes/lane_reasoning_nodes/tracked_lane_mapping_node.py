@@ -57,10 +57,11 @@ class SideBinEvidence:
 class TrackedLaneMappingNode(Node):
     """Build a short-term, route-ready lane map from tracked lane paths.
 
-    The mapper stores direct lane observations as world-coordinate vectors.
-    On publication it reprojects those vectors into the current ego frame to
-    produce rolling raster layers and a vector ``LaneMap`` suitable for later
-    route and local-planning integration.
+    The mapper stores direct lane observations in an internal world
+    convention compatible with the tracker's forward-left ego geometry.
+    On publication it reprojects those vectors into the current ego frame for
+    rolling raster layers and converts vector-map geometry to the direct
+    ``carla_world`` convention used by the CARLA bridge and global planner.
 
     Held and inferred tracker outputs are intentionally not reinserted as new
     evidence. This prevents temporal memory from amplifying itself.
@@ -602,6 +603,33 @@ class TrackedLaneMappingNode(Node):
             dtype=np.float64,
         )
         return translated @ inverse_rotation.T
+
+    @staticmethod
+    def _internal_world_to_carla_world(
+        points: np.ndarray,
+    ) -> np.ndarray:
+        """Convert mapper-internal world XY to direct CARLA world XY.
+
+        Tracker geometry uses a forward-left ego convention. The mapper's
+        odometry sign conversion therefore creates an internal world frame
+        mirrored in Y relative to the direct CARLA coordinates published by
+        the bridge.
+
+        LaneMap advertises ``carla_world``, so vector-map geometry must be
+        converted back to the bridge convention before publication.
+        """
+        converted = points.astype(
+            np.float64,
+            copy=True,
+        )
+        converted[:, 1] *= -1.0
+        return converted
+
+    @staticmethod
+    def _internal_world_yaw_to_carla_world(
+        yaw_rad: float,
+    ) -> float:
+        return -float(yaw_rad)
 
     @staticmethod
     def _direct_side(
@@ -1224,9 +1252,24 @@ class TrackedLaneMappingNode(Node):
         right_local_points = np.column_stack([local_forward, local_right])
         center_local_points = np.column_stack([local_forward, local_center])
 
-        left_world = self._ego_to_world(left_local_points, pose)
-        right_world = self._ego_to_world(right_local_points, pose)
-        center_world = self._ego_to_world(center_local_points, pose)
+        left_world = self._internal_world_to_carla_world(
+            self._ego_to_world(
+                left_local_points,
+                pose,
+            )
+        )
+        right_world = self._internal_world_to_carla_world(
+            self._ego_to_world(
+                right_local_points,
+                pose,
+            )
+        )
+        center_world = self._internal_world_to_carla_world(
+            self._ego_to_world(
+                center_local_points,
+                pose,
+            )
+        )
 
         left_confidence = left_bins.confidence[run]
         right_confidence = right_bins.confidence[run]
@@ -1315,7 +1358,15 @@ class TrackedLaneMappingNode(Node):
                 - center_local_points[previous_index]
             )
             local_yaw = math.atan2(float(tangent[1]), float(tangent[0]))
-            world_yaw = self._normalize_angle(pose.yaw_rad + local_yaw)
+            internal_world_yaw = self._normalize_angle(
+                pose.yaw_rad
+                + local_yaw
+            )
+            world_yaw = self._normalize_angle(
+                self._internal_world_yaw_to_carla_world(
+                    internal_world_yaw
+                )
+            )
 
             sample = LaneSample()
             sample.s = float(cumulative_s[index])
