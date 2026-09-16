@@ -31,6 +31,8 @@ setup(
             "planning_visualization.odom_tf_broadcaster_node:main",
             "global_lane_graph_visualizer_node = "
             "planning_visualization.global_lane_graph_visualizer_node:main",
+            "foxglove_world_visualizer_node = "
+            "planning_visualization.foxglove_world_visualizer_node:main",
         ],
     },
 )
