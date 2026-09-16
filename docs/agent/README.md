@@ -18,11 +18,17 @@ This folder gives Codex persistent context and a repeatable process for reviewin
 
 The repository root `AGENTS.md` defines the agent's mission and mandatory behavior.
 
-## First review
+## Current evidence checkpoint
 
-After this framework is merged, run Codex with:
+The [2026-09-16 documentation refresh](reports/2026-09-16-routing-documentation-refresh.md) replaces the initial July documentation-derived state with source-verified lane mapping and global routing contracts plus explicitly supplied runtime evidence. Start with [CURRENT_STATE.md](CURRENT_STATE.md), [ARCHITECTURE.md](ARCHITECTURE.md), and [ROADMAP.md](ROADMAP.md). RoutePlan ↔ LaneMap association is the next milestone, not an existing subsystem.
 
-> Perform a full repository review according to `AGENTS.md` and `docs/agent/REVIEW_PLAYBOOK.md`. Do not modify implementation code. Validate the initial project state and architecture, create a dated report, and update the agent state files only where supported by repository evidence. End with no more than three active tasks for the next development cycle.
+Milestone pages and dated reports retain their historical context. Current agent state may supersede their next steps without rewriting the older records.
+
+## Full review
+
+For a broader review than the bounded documentation refresh, use:
+
+> Perform a full repository review according to `AGENTS.md` and `docs/agent/REVIEW_PLAYBOOK.md`. Do not modify implementation code. Compare against the latest dated report, validate the current state and architecture, and update agent state only where supported by evidence. End with no more than three active tasks for the next development cycle.
 
 ## Incremental review
 

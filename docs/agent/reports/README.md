@@ -15,3 +15,7 @@ Examples:
 ```
 
 Reports are historical evidence. Do not silently rewrite an old report when the project changes. Create a new report and update the current state files instead.
+
+## Reports
+
+- [2026-09-16 — Routing documentation refresh](2026-09-16-routing-documentation-refresh.md): lane mapping, global routing, frame/visualization contracts, reproducible startup, supplied runtime evidence, and the next association milestone. Documentation-only; no new runtime execution.

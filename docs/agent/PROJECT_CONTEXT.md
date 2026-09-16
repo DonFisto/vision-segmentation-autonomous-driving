@@ -41,9 +41,19 @@ The repository currently covers or partially covers:
 - reactive navigation prototypes;
 - local static and dynamic occupancy layers;
 - short-term accumulated local mapping using simulator-provided odometry;
+- road-marking segmentation, metric BEV lane geometry, filtering, and curve fitting;
+- temporal lane tracking with quality gates, lane-width reasoning, and odometry propagation;
+- rolling perception-derived vector LaneMap;
+- privileged CARLA/OpenDRIVE topology extraction, sampled lane routing graph, Dijkstra baseline, and A* global route planning;
+- ego/goal graph association and valid/invalid RoutePlan publication;
+- planning/Foxglove visualization and local tmux/SSH startup tooling;
 - CARLA control integration.
 
 The accumulated map is intentionally a short-term local representation, not a complete SLAM system.
+
+As of 2026-09-16, route-ready lane mapping and global routing have completed development integration milestones. The active branch is `feature/route-lane-association`, starting from the routing/startup checkpoint. RoutePlan ↔ LaneMap association is next and absent; behavior planning, local trajectory planning, and trajectory tracking for this pipeline remain future work. Older reactive control nodes are parallel prototypes, not implementations of those layers. See [CURRENT_STATE.md](CURRENT_STATE.md) for evidence and limitations.
+
+The long-term decomposition is simulation/sensors → perception → local environment representation → global route planning → behavior/maneuver planning → motion/trajectory planning → control. In the current implementation, local LaneMap and global RoutePlan are produced independently. CARLA/OpenDRIVE provides privileged global topology for development; it must remain distinct from perceived local geometry. Preserve explicit ROS2 boundaries, confidence and unknown states, and require runtime evidence before declaring an integration milestone complete. Build reusable subsystem infrastructure compatible with later trajectory planning and control.
 
 ## Near-term definition of success
 

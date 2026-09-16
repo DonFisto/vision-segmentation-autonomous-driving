@@ -1,112 +1,47 @@
 # Project Roadmap
 
-Last initialized: 2026-07-30
+Updated 2026-09-16 against `7b54639`. [Lane mapping](../milestones/lane_perception_tracking_mapping.md) and [global routing](../milestones/global_route_planning.md) are completed development integration milestones. The branch `feature/route-lane-association` names the NEXT milestone; no association implementation exists yet.
 
-This is an initial roadmap based on the documented repository state. The first full Codex review should validate and revise it using source code and runtime evidence.
+The active milestone is RoutePlan ↔ LaneMap association. Keep the following two tasks active; later stages are dependency gates, not concurrent commitments. Effort estimates are qualitative (S: bounded design/probe work; M: several implementation/validation sessions; L: broader integration). They are not deadlines.
 
-## Roadmap rule
+## Required now — 1. Define and validate geometric association semantics
 
-Only a small number of tasks should be active at once. A task enters the active roadmap only when its dependency, acceptance criteria, and learning value are clear.
+- **Benefit / why now:** connect global intent to local perceived geometry without mixing ownership, IDs, frames, or uncertainty.
+- **Dependency:** current direct-world RoutePlan and LaneMap contracts, hero pose, and the completed frame/startup checkpoint.
+- **Deliverable:** a small design and diagnostic specification for selecting the local RoutePlan window around ego; route-relative progress `s`, signed lateral offset `d`, heading error, overlap/coverage, and confidence-aware gates. Specify temporal hysteresis only where measured ambiguity warrants it.
+- **Acceptance:** define projection/tie handling, sign conventions in direct CARLA world, input-age policy, new-route/reset behavior, and explicit no-valid-association output. Include empty/partial LaneMap and intersection examples. No equality matching of global/local IDs or revisions; no extra y flip; no OpenDRIVE-filled perception.
+- **Effort / learning value:** S–M / high; Level 2 geometry, coordinate contracts, and uncertainty reasoning.
+- **Displaces:** new perception models, classical lane-detector retuning, legacy occupancy polish, and premature message proliferation.
 
-## Milestone 0 — Validate the system contracts
+These are planned concepts, not a finalized ROS message. Source already exposes local-forward-left curvature alongside world-converted LaneMap poses; record which scalar conventions association needs, and validate signed curvature before any later controller consumes it.
 
-**Purpose:** ensure that the existing perception and mapping stack can support planning and control without hidden frame, timing, or representation errors.
+## Required now — 2. Implement and runtime-validate the separate association layer
 
-### Active task candidates
+- **Benefit / why now:** produce a reusable route-relative local reference/corridor for the next planner.
+- **Dependency:** task 1's accepted semantics and diagnostic cases.
+- **Deliverable:** one modular consumer of RoutePlan, LaneMap, and required ego state; preserve topology generation and lane tracking responsibilities.
+- **Acceptance:** demonstrate matched geometry on straightforward lanes, explicit rejection for invalid routes/poor evidence, tolerance of disappearing or partial lanes at intersections, and stable identity/progress behavior across updates. Measure lateral/heading discrepancy, overlap, accepted/rejected availability, discontinuities, and latency; choose thresholds from evidence rather than inventing them here. Record runtime evidence before marking the milestone complete.
+- **Effort / learning value:** M / high; Level 2 association and integration debugging.
+- **Displaces:** implementing multiple planners or advanced optimization before a reliable input/reference boundary exists.
 
-1. **Document coordinate frames, units, and timestamps**
-   - Deliverable: a verified interface table for every active ROS2 node.
-   - Acceptance: every geometric topic has a producer, consumer, frame, units, and timestamp source.
-   - Learning value: high.
-   - Displaces: visual polish and new perception features.
+No implementation or message creation is authorized by the documentation refresh itself.
 
-2. **Define the planner input contract**
-   - Deliverable: one stable representation selected from the current local occupancy or mapping outputs, with documented semantics.
-   - Acceptance: a small standalone consumer can read and visualize the exact representation the planner will use.
-   - Learning value: high.
-   - Displaces: implementing multiple planner variants before the input is stable.
+## Dependency-gated work before prototype completion
 
-3. **Establish a replayable baseline scenario**
-   - Deliverable: one repeatable CARLA route or scenario with logs and baseline outputs.
-   - Acceptance: the same scenario can be rerun and produces comparable measurements.
-   - Learning value: medium-high.
-   - Displaces: adding more scenarios before the first is measurable.
+| Sequence | Benefit / deliverable | Dependency / acceptance | Effort; learning value | Lower-value work displaced |
+| --- | --- | --- | --- | --- |
+| 3. Simple local reference/trajectory planner | Convert accepted local corridor into a usable reference with explicit speed/timing/validity semantics | Validated association; define behavior/maneuver responsibility and missing-evidence handling; verify continuity and simple feasibility limits | M–L; high | MPC and complex optimization before a baseline works |
+| 4. Trajectory tracking/control | Close the feedback loop with one understandable lateral and longitudinal baseline | Defined trajectory/ego-state contract; measure lateral/speed error and command limits in repeatable CARLA scenarios | M; high | Multiple competing controllers, replacement of simulator odometry |
+| 5. Systematic closed-loop evaluation | Quantify completion, collisions/boundary violations, tracking error, smoothness, and latency | Working planner/controller; repeatable scenario setup and recorded metrics | M; high | Adding scenarios/features without a comparable baseline |
 
-## Milestone 1 — Minimal map-based planning
+Pure Pursuit or Stanley plus PID are possible future baselines, not current implementations or a finalized controller choice. Minimal behavior/maneuver policy belongs at the appropriate planning boundary; global legal lane-change edges alone cannot authorize executing a maneuver around dynamic traffic.
 
-**Purpose:** generate a usable reference path from the selected environment representation.
+## Valuable later / not justified now
 
-- Start with the simplest planner compatible with the representation and scenario.
-- Separate path/reference generation from low-level control.
-- Do not begin with MPC or a complex optimization-based trajectory planner unless a simpler planner cannot satisfy the baseline scenario.
+After the first measured loop, select one planning, optimization, or control depth experiment with a baseline comparison (M–L, high learning value; depends on stage 5; displaces additional breadth). Level 3 is a selective target, not a claim of existing mastery.
 
-### Exit criteria
+Full SLAM, production HD-map infrastructure, complex learned prediction, large deployment systems, and broad refactors are not justified for the immediate prototype. They would displace the two active integration tasks without completing their dependencies. Older object/depth/spatial capabilities remain available but are outside the association critical path.
 
-- A documented planner input and output contract exists.
-- The planner produces a collision-aware or lane-consistent reference for the baseline scenario.
-- Planning time is measured.
-- Failure cases are observable and logged.
+## Evidence and completion rule
 
-## Milestone 2 — Basic control and actuation
-
-**Purpose:** track the reference path in closed loop.
-
-Recommended first version:
-
-- Pure Pursuit or Stanley for lateral control;
-- PID for longitudinal control;
-- simulator-specific scaling and saturation isolated in the actuation layer.
-
-### Exit criteria
-
-- The vehicle follows the reference in the baseline scenario.
-- Lateral tracking error, speed error, steering behavior, and completion are measured.
-- Controller inputs and outputs have explicit units and sign conventions.
-- Planner and controller can be tested independently.
-
-## Milestone 3 — Closed-loop evaluation
-
-**Purpose:** turn the prototype into an engineering experiment rather than a visual demo.
-
-Minimum metrics:
-
-- scenario completion;
-- collision or boundary violations;
-- lateral tracking error;
-- longitudinal speed error;
-- control smoothness or steering oscillation;
-- per-stage and end-to-end latency.
-
-### Exit criteria
-
-- At least three representative scenarios are repeatable.
-- Metrics are collected automatically or with a documented procedure.
-- A baseline report identifies the dominant failure mode.
-
-## Milestone 4 — One depth experiment
-
-**Purpose:** deepen one area after the full stack works.
-
-Leading candidate:
-
-- replace the basic lateral controller or planner with an MPC or optimization-based approach;
-- compare it against the baseline using the same scenarios and metrics;
-- explain the formulation, constraints, solver behavior, and trade-offs.
-
-This milestone should target Level 3 understanding.
-
-## Deferred until justified
-
-- full SLAM;
-- HD-map infrastructure;
-- complex behavior prediction;
-- learned end-to-end planning;
-- large-scale deployment infrastructure;
-- extensive refactors unrelated to a measured problem;
-- multiple advanced controllers before one baseline controller is evaluated.
-
-## First Codex review request
-
-Use this prompt after merging the agent framework:
-
-> Perform a full repository review according to `AGENTS.md` and `docs/agent/REVIEW_PLAYBOOK.md`. Do not modify implementation code. Validate the initial project state and architecture, create a dated report, and update the agent state files only where supported by repository evidence. End with no more than three active tasks for the next development cycle.
+Use [CURRENT_STATE.md](CURRENT_STATE.md) and [ARCHITECTURE.md](ARCHITECTURE.md) as the baseline. Source verification establishes implementation; runtime diagnostics establish the bounded integration behavior actually demonstrated. A visually plausible route or a message schema does not complete association, trajectory planning, or control.

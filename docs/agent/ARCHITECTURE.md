@@ -1,108 +1,83 @@
 # Architecture Map
 
-Last initialized: 2026-07-30
+Source-verified at `7b54639`, 2026-09-16. This describes the lane/global-routing path; [older milestones](../README.md) retain the parallel object/depth/free-space/occupancy history.
 
-This document is an initial map based on repository documentation. The first full Codex review must validate every interface against source code, launch files, topics, frames, parameters, and runtime evidence.
-
-## Current documented pipeline
+## Data ownership and flow
 
 ```text
-CARLA RGB + hero odometry
-        |
-        +--> semantic segmentation --> object extraction --> tracking --+
-        |                                                               |
-        +--> monocular depth --------------------------------------------+--> object-depth fusion
-        |
-        +--> segmentation + depth --> free-space estimation --> reactive navigation
-        |
-        +--> segmentation + depth --> local occupancy layers
-                                             |
-hero odometry + local occupancy layers ------+--> accumulated local mapping
+LOCAL PERCEPTION SIDE                         GLOBAL PRIVILEGED MAP SIDE
+CARLA RGB + CameraInfo                        CARLA/OpenDRIVE
+  -> road_marking_node                          -> coarse directed topology
+  -> lane_geometry_node (metric BEV)             -> sampled lane routing graph
+  -> lane_component_filter_node                 -> legal follow/change edges
+  -> lane_context_filter_node                   -> ego + goal map association
+  -> lane_curve_fit_node                        -> A* (Dijkstra baseline)
+  -> lane_tracking_node + hero odometry          -> RoutePlan
+  -> tracked_lane_mapping_node                       |
+  -> LaneMap                                         |
+       |                                             |
+       +----> NEXT: route-lane association <----------+
+                  route-relative reference/corridor
+                         |
+                  FUTURE: behavior/maneuver decisions,
+                  local motion/trajectory planning,
+                  trajectory tracking/control
 ```
 
-## ROS2 nodes documented in the repository overview
+This does not imply a LaneMap subscription in `global_route_planner`: its map source is CARLA. Conversely, the tracked mapper does not import OpenDRIVE route geometry. Association must remain separate from both topology construction and lane perception. Its interface is not finalized.
 
-```text
-carla_bridge_node
-semantic_seg_node
-object_detection_node
-tracking_node
-depth_node
-fusion_node
-free_space_node
-reactive_navigation_node
-free_space_navigation_node
-local_occupancy_node
-local_mapping_node
-carla_control_node
-```
+The earlier parallel path is RGB → semantic segmentation → object extraction/tracking, plus depth → fusion/free space/occupancy → accumulated mapping with odometry. Reactive navigation uses earlier perception cues. None of those nodes implements the future RoutePlan/Trajectory control contract.
 
-## Architectural layers
+## Relevant interface registry
 
-| Layer | Responsibility | Initial assessment |
-| --- | --- | --- |
-| Model development | Training, evaluation, inference, and qualitative segmentation outputs | Documented |
-| Dataset engineering | CARLA collection, Cityscapes conversion, filtering, and balancing | Documented |
-| ROS2 perception | Bridging, segmentation, extraction, tracking, depth, and fusion | Documented |
-| Navigation and mapping | Free-space navigation, occupancy estimation, and accumulated local mapping | Documented but requires interface validation |
-| Planning | Route/reference/path/trajectory generation | Not yet clearly represented as a dedicated layer |
-| Control | Lateral and longitudinal tracking | Partial or unclear in current documentation |
-| Actuation | Conversion to CARLA steering, throttle, and brake commands | Node exists; contract requires validation |
-| Evaluation | Repeatable scenarios and quantitative system metrics | Not yet clearly represented as a first-class layer |
+Source roots: [carla_bridge_node](../../ros/ros2_ws/src/carla_bridge_node/carla_bridge_node), [lane_geometry_node](../../ros/ros2_ws/src/lane_geometry_node/lane_geometry_node), [lane_reasoning_nodes](../../ros/ros2_ws/src/lane_reasoning_nodes/lane_reasoning_nodes), [global_route_planner](../../ros/ros2_ws/src/global_route_planner/global_route_planner), [planning_visualization](../../ros/ros2_ws/src/planning_visualization/planning_visualization). Producers below are executable names; visualization ROS node names omit `_node`. The bridge executable registers the ROS node name `carla_rgb_publisher`.
 
-## Intended next-stage architecture
+| Producer | Topic | Message type | Frame | Current consumer / semantic role |
+| --- | --- | --- | --- | --- |
+| `carla_bridge_node` | `/carla/hero_odom` | `nav_msgs/msg/Odometry` | parent `carla_world`, child `hero` | Tracker, mapper, global planner, TF adapters, older mapping; privileged ego pose |
+| `lane_tracking_node` | `/perception/lane/tracked_left_boundary` | `nav_msgs/msg/Path` | `hero`, forward-left lane convention | Tracked mapper and Foxglove adapter; local boundary |
+| `lane_tracking_node` | `/perception/lane/tracked_right_boundary` | `nav_msgs/msg/Path` | `hero`, forward-left lane convention | Same, right boundary |
+| `lane_tracking_node` | `/perception/lane/tracked_centerline` | `nav_msgs/msg/Path` | `hero`, forward-left lane convention | Same, centerline when supported |
+| `lane_tracking_node` | `/perception/lane/tracking_status` | `std_msgs/msg/String` (JSON) | `frame_id` + `stamp_ns` in payload | Mapper; measurement/state/confidence/width/motion evidence absent from Path itself |
+| `tracked_lane_mapping_node` | `/perception/lane/local_map/vector` | `autonomy_interfaces/msg/LaneMap` | `carla_world` | Diagnostics now; planned association consumer. Perception-derived rolling geometry |
+| Operator / goal publisher | `/planning/goal` | `geometry_msgs/msg/PoseStamped` | must match `carla_world` | `global_route_planner_node`; destination position, orientation ignored |
+| `global_route_planner_node` | `/planning/route_plan` | `autonomy_interfaces/msg/RoutePlan` | `carla_world` | Route visualizer, diagnostics; future association. Global intent/nominal geometry |
+| `route_plan_visualizer_node` | `/planning/route_path` | `nav_msgs/msg/Path` | `carla_world` | Foxglove adapter/diagnostics; coarse route or empty path on non-VALID status |
+| `global_lane_graph_visualizer_node` | `/planning/global_lane_graph/markers` | `visualization_msgs/msg/MarkerArray` | each marker `carla_world` | Foxglove adapter; separately rebuilt static graph, z raised 0.05 m for display |
+| `foxglove_world_visualizer_node` | `/planning/route_path_viz` | `nav_msgs/msg/Path` | `carla_world_viz` | Foxglove display only |
+| `foxglove_world_visualizer_node` | `/planning/global_lane_graph/markers_viz` | `visualization_msgs/msg/MarkerArray` | each marker `carla_world_viz` | Foxglove display only |
+| `foxglove_world_visualizer_node` | `/perception/viz/lane/*` | `nav_msgs/msg/Path` | `hero_viz` | Six display aliases: `left_boundary`, `right_boundary`, `centerline`, `tracked_left_boundary`, `tracked_right_boundary`, `tracked_centerline` |
 
-The first closed-loop prototype should evolve toward:
+Untracked inputs to the Foxglove adapter are `/perception/lane/left_boundary`, `/perception/lane/right_boundary`, and `/perception/lane/centerline`, produced by `lane_curve_fit_node` in `hero`. The upstream image chain and gating are in the [lane milestone](../milestones/lane_perception_tracking_mapping.md).
 
-```text
-Sensors / simulator state
-        |
-        v
-Perception and local geometry
-        |
-        v
-Local environment representation
-        |
-        v
-Reference or path planner
-        |
-        v
-Lateral + longitudinal controller
-        |
-        v
-CARLA actuation
-        |
-        +-------------------- feedback --------------------+
-```
+## Timing, units, and failure boundaries
 
-This is an architectural direction, not a claim that these interfaces already exist.
+- Positions, widths, horizons, and graph distances are metres; curvature is inverse metres. CARLA routing nodes store yaw in degrees internally and publish quaternions. Lane algorithms use radians and forward-left polynomials.
+- The bridge's `publish_hero_odom` uses the node clock when sampling CARLA; `odom_rate_hz=20.0` is a source default, not a measured rate. Image/CameraInfo callbacks also use the bridge clock, not a documented common simulator acquisition timestamp. Odometry twist copies CARLA velocity components; this registry does not certify a body-frame twist contract.
+- Tracking is callback-driven. Left/right paths must be within the default 50 ms synchronization tolerance; curve status is selected from coefficient-compatible history. The tracker finds nearest buffered odometry within 150 ms and propagates/refits curves at lane processing time. Missing/stale odometry disables propagation; excessive motion resets tracks.
+- The mapper waits for left/right/center paths and JSON status with the same `stamp_ns`, then uses buffered/interpolated odometry. It publishes using the latest odometry stamp on a default 10 Hz timer, only while that odometry is sufficiently fresh (default 300 ms). These settings do not guarantee throughput. With fresh odometry but insufficient lane support it can publish an empty LaneMap; stale/no odometry suppresses map publication and exposes status.
+- RoutePlan uses planner publication time. Search runs for a newly accepted goal or a changed sampled ego start node, not every raw odometry callback. There is no current route/odometry age acceptance policy for future consumers. Rejected goals retain the prior goal; failed ego association logs/returns. Only a completed no-path search publishes INVALID. Consumers must not assume all failures clear a durable route.
+- RoutePlan, route paths, and graph markers use reliable, transient-local, keep-last depth 1 QoS. LaneMap uses default reliable/volatile depth 10. Local lane visualization aliases use default depth 10; TF uses odometry timestamps. Durable output is retained for compatible late subscribers while the publisher lives, not across a planner restart.
 
-## Interface registry
+## Coordinate frames
 
-The first full review should populate this table from code.
+| Name | Meaning and ownership |
+| --- | --- |
+| `carla_world` | Production direct CARLA world positions/yaw: bridge pose, RoutePlan, published LaneMap positions/headings, and unmirrored global graph display source. No downstream y flip for route-lane association. |
+| `hero` | Odometry child name and lane-path frame label. Lane local geometry is x-forward/y-left/z-up; tracker/mapper convert direct odometry internally with `odom_y_sign=-1`, `odom_yaw_sign=-1`. The shared label alone does not make lane paths numerically compatible with direct-CARLA production TF. |
+| `carla_world_viz` | Visualization-only world basis with `y_viz=-y_carla`. It is not a planning frame. |
+| `hero_viz` | Visualization ego frame under `carla_world_viz`; receives the existing forward-left local lane points without another mirror. |
 
-| Producer | Output topic/type | Frame | Units | Rate / timestamp | Consumer | Status |
-| --- | --- | --- | --- | --- | --- | --- |
-| CARLA bridge | TBD | TBD | TBD | TBD | perception nodes | Unverified |
-| Semantic segmentation | TBD | camera/image | class IDs or mask semantics TBD | TBD | extraction, free space, occupancy | Unverified |
-| Depth | TBD | camera/image | relative or metric depth TBD | TBD | fusion, free space, occupancy | Unverified |
-| Tracking | TBD | image or camera frame TBD | TBD | TBD | fusion / mapping | Unverified |
-| Local occupancy | TBD | vehicle-relative TBD | cell resolution TBD | TBD | local mapping / future planner | Unverified |
-| Local mapping | TBD | world or rolling local frame TBD | cell resolution TBD | TBD | future planner | Unverified |
-| Planner | TBD | TBD | path/trajectory semantics TBD | TBD | controller | Absent or unclear |
-| Controller | TBD | vehicle/control frame TBD | steering/throttle/brake scaling TBD | TBD | CARLA control | Partial or unclear |
+`odom_tf_broadcaster_node` copies odometry to production TF `carla_world → hero`. `foxglove_world_visualizer_node` builds the separate display tree `carla_world_viz → hero_viz`; it reflects global positions and changes orientation basis with `S=diag(1,-1,1)`, `R_viz=S R_carla S`, quaternion `(x,y,z,w) → (-x,y,-z,w)`. The reflection is performed on copied display messages; it is not a rigid TF transform connecting the two world frames.
 
-## Architecture invariants to establish
+The mapper's `_internal_world_to_carla_world` and `_internal_world_yaw_to_carla_world` perform the public vector conversion. Scalar `LaneSample.curvature` is still computed from the local forward-left centerline, without a sign conversion in that publication step. The supplied positional probe does not validate a downstream signed-curvature interpretation; settle that contract before using it for control. See the [lane milestone](../milestones/lane_perception_tracking_mapping.md).
 
-1. Every geometric output has an explicit coordinate frame.
-2. Every numeric quantity has documented units and sign convention.
-3. Sensor-derived outputs preserve or explicitly transform timestamps.
-4. Static and dynamic obstacles remain semantically distinct where required downstream.
-5. The planner consumes one stable, documented environment representation.
-6. The controller receives a defined path or trajectory plus current vehicle state.
-7. The actuation layer owns simulator-specific scaling, clipping, and command semantics.
-8. Evaluation can replay or reproduce representative scenarios.
+For Foxglove use fixed frame `carla_world_viz`, display frame `hero_viz`, and the `_viz` global topics plus `/perception/viz/lane/*`. The adapter preserves source timestamps, including the observed route/path-viz pair. It does not currently create a mirrored LaneMap alias.
 
-## Known design boundary
+## Shared schema versus implemented semantics
 
-CARLA-provided hero odometry is currently an accepted simplification. Replacing it with visual odometry or SLAM should not block the first planning-and-control milestone unless the review finds that the existing pose interface is unusable.
+[autonomy_interfaces/msg](../../ros/ros2_ws/src/autonomy_interfaces/msg) defines `LaneSample`, `LaneBoundary`, `LaneSegment`, `LaneMap`, `RoutePlan`, `TrajectoryPoint`, and `Trajectory`. The last two provide time offsets, poses, velocity/acceleration, curvature, steering angle, IDs, validity, and confidence fields for future work; their existence does not establish a trajectory producer or controller.
+
+`LaneMap` schema 2 is rolling perception memory (`globally_consistent=false`); current segment ID is 1 with boundary IDs 2/3, unknown topology/turn and unknown speed limit. A segment's presence does not certify collision freedom or intersection classification.
+
+`RoutePlan.lane_segment_ids` are global OpenDRIVE topology-edge hashes, not local `LaneSegment.id` values. `RoutePlan.map_revision` fingerprints map name and OpenDRIVE; `LaneMap.map_revision` is a local observation integration/pruning counter. Neither namespace permits equality-based association. [Global routing semantics](../milestones/global_route_planning.md) define the hash, statuses, confidence heuristic, and coarse-path limitations.
