@@ -30,6 +30,11 @@ setup(
     entry_points={
         "console_scripts": [
             (
+                "route_ego_diagnostic_node = "
+                "global_route_planner."
+                "route_ego_diagnostic_node:main"
+            ),
+            (
                 "topology_diagnostic_node = "
                 "global_route_planner."
                 "topology_diagnostic_node:main"
