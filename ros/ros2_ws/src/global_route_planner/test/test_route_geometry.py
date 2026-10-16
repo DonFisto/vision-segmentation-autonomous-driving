@@ -2,11 +2,62 @@ import math
 import unittest
 
 from global_route_planner.route_geometry import (
+    interpolate_polyline_at_s,
     project_point_to_polyline,
 )
 
-
 class TestRouteGeometry(unittest.TestCase):
+    def test_interpolation_on_straight_route(self):
+        route = [(0.0, 0.0), (10.0, 0.0)]
+
+        result = interpolate_polyline_at_s(route, 4.0)
+
+        self.assertAlmostEqual(result.x, 4.0)
+        self.assertAlmostEqual(result.y, 0.0)
+        self.assertAlmostEqual(result.heading_rad, 0.0)
+
+    def test_interpolation_across_segments(self):
+        route = [
+            (0.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 10.0),
+        ]
+
+        result = interpolate_polyline_at_s(route, 14.0)
+
+        self.assertAlmostEqual(result.x, 10.0)
+        self.assertAlmostEqual(result.y, 4.0)
+        self.assertAlmostEqual(
+            result.heading_rad,
+            math.pi / 2,
+        )
+
+    def test_interpolation_at_vertex(self):
+        route = [
+            (0.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 10.0),
+        ]
+
+        result = interpolate_polyline_at_s(route, 10.0)
+
+        self.assertAlmostEqual(result.x, 10.0)
+        self.assertAlmostEqual(result.y, 0.0)
+        self.assertAlmostEqual(
+            result.heading_rad,
+            math.pi / 2,
+        )
+        self.assertEqual(result.segment_index, 1)
+
+    def test_interpolation_outside_route(self):
+        route = [(0.0, 0.0), (10.0, 0.0)]
+
+        with self.assertRaises(ValueError):
+            interpolate_polyline_at_s(route, 12.0)
+
+        with self.assertRaises(ValueError):
+            interpolate_polyline_at_s(route, -1.0)
+
     def test_projection_beyond_route_endpoint(self):
         route = [(0.0, 0.0), (10.0, 0.0)]
 
@@ -85,4 +136,3 @@ class TestRouteGeometry(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

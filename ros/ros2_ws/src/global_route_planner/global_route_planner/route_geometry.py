@@ -89,3 +89,69 @@ def project_point_to_polyline(
         raise ValueError("Polyline contains no nonzero segments")
 
     return best
+
+@dataclass(frozen=True)
+class RouteSample:
+    s_m: float
+    x: float
+    y: float
+    heading_rad: float
+    segment_index: int
+def interpolate_polyline_at_s(
+    points: list[tuple[float, float]],
+    s_m: float,
+) -> RouteSample:
+    """Interpolate a directed polyline at a given arc length."""
+
+    if len(points) < 2:
+        raise ValueError("A polyline requires at least two points")
+
+    segments = []
+    cumulative_s = 0.0
+
+    for i in range(len(points) - 1):
+        ax, ay = points[i]
+        bx, by = points[i + 1]
+
+        dx = bx - ax
+        dy = by - ay
+
+        length = math.hypot(dx, dy)
+
+        if length == 0.0:
+            continue
+
+        segments.append(
+            (i, ax, ay, dx, dy, length, cumulative_s)
+        )
+
+        cumulative_s += length
+
+    if not segments:
+        raise ValueError("Polyline contains no nonzero segments")
+
+    if not math.isfinite(s_m):
+        raise ValueError("Arc length must be finite")
+
+    if s_m < 0.0 or s_m > cumulative_s:
+        raise ValueError("Arc length is outside the route")
+
+    for index, segment in enumerate(segments):
+        i, ax, ay, dx, dy, length, start_s = segment
+
+        end_s = start_s + length
+        is_last = index == len(segments) - 1
+
+        # At interior vertices, prefer the outgoing segment.
+        if s_m < end_s or is_last:
+            t = (s_m - start_s) / length
+
+            return RouteSample(
+                s_m=s_m,
+                x=ax + t * dx,
+                y=ay + t * dy,
+                heading_rad=math.atan2(dy, dx),
+                segment_index=i,
+            )
+
+    raise RuntimeError("Failed to interpolate route")
