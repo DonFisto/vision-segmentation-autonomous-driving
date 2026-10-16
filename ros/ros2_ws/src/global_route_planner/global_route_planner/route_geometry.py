@@ -155,3 +155,83 @@ def interpolate_polyline_at_s(
             )
 
     raise RuntimeError("Failed to interpolate route")
+
+@dataclass(frozen=True)
+class RouteWindow:
+    start_s_m: float
+    end_s_m: float
+    samples: tuple[RouteSample, ...]
+def extract_route_window(
+    points: list[tuple[float, float]],
+    center_s_m: float,
+    backward_m: float,
+    forward_m: float,
+) -> RouteWindow:
+    """Extract a route interval while preserving route-relative s."""
+
+    if len(points) < 2:
+        raise ValueError("A polyline requires at least two points")
+
+    for name, value in (
+        ("center_s_m", center_s_m),
+        ("backward_m", backward_m),
+        ("forward_m", forward_m),
+    ):
+        if not math.isfinite(value):
+            raise ValueError(f"{name} must be finite")
+
+    if backward_m < 0.0 or forward_m < 0.0:
+        raise ValueError("Window distances cannot be negative")
+
+    # Cumulative arc length at every original route vertex.
+    vertex_s = [0.0]
+
+    for i in range(len(points) - 1):
+        ax, ay = points[i]
+        bx, by = points[i + 1]
+
+        length = math.hypot(bx - ax, by - ay)
+
+        vertex_s.append(vertex_s[-1] + length)
+
+    total_length = vertex_s[-1]
+
+    if not math.isfinite(total_length):
+        raise ValueError("Route length must be finite")
+
+    if total_length == 0.0:
+        raise ValueError("Polyline contains no nonzero segments")
+
+    if center_s_m < 0.0 or center_s_m > total_length:
+        raise ValueError("Window center is outside the route")
+
+    # Clip the requested interval to the actual route limits.
+    start_s = max(0.0, center_s_m - backward_m)
+    end_s = min(total_length, center_s_m + forward_m)
+
+    samples = [
+        interpolate_polyline_at_s(points, start_s)
+    ]
+
+    previous_s = start_s
+
+    # Preserve original route vertices inside the window.
+    # Skip repeated arc-length values from duplicate points.
+    for s in vertex_s[1:-1]:
+        if start_s < s < end_s and s > previous_s:
+            samples.append(
+                interpolate_polyline_at_s(points, s)
+            )
+            previous_s = s
+
+    # A zero-length window contains only its center sample.
+    if end_s > start_s:
+        samples.append(
+            interpolate_polyline_at_s(points, end_s)
+        )
+
+    return RouteWindow(
+        start_s_m=start_s,
+        end_s_m=end_s,
+        samples=tuple(samples),
+    )
