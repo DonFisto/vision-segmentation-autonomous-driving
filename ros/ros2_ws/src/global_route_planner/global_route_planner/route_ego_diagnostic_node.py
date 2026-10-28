@@ -21,14 +21,50 @@ from global_route_planner.route_geometry import (
 )
 
 
+def quaternion_to_yaw(quaternion):
+    """Extract planar yaw in radians from a normalized ROS quaternion."""
+
+    x = float(quaternion.x)
+    y = float(quaternion.y)
+    z = float(quaternion.z)
+    w = float(quaternion.w)
+
+    components = (x, y, z, w)
+
+    if not all(math.isfinite(value) for value in components):
+        raise ValueError("Quaternion contains non-finite values")
+
+    norm = math.sqrt(x*x + y*y + z*z + w*w)
+
+    if not math.isfinite(norm) or norm < 1e-6:
+        raise ValueError("Quaternion has invalid norm")
+
+    x /= norm
+    y /= norm
+    z /= norm
+    w /= norm
+
+    sin_yaw = 2.0 * (w*z + x*y)
+    cos_yaw = 1.0 - 2.0 * (y*y + z*z)
+
+    return math.atan2(sin_yaw, cos_yaw)
+
+
+def normalize_angle(angle_rad):
+    """Normalize an angle to [-pi, pi)."""
+
+    return (angle_rad + math.pi) % (2.0 * math.pi) - math.pi
+
+
 class RouteEgoDiagnosticNode(Node):
-    """Project the live ego position onto the active global route."""
+    """Project the live ego pose onto the active global route."""
 
     def __init__(self):
         super().__init__("route_ego_diagnostic")
 
         self.declare_parameter("frame_id", "carla_world")
         self.declare_parameter("max_projection_distance_m", 5.0)
+        self.declare_parameter("max_heading_error_deg", 45.0)
         self.declare_parameter("max_odom_age_s", 2.0)
         self.declare_parameter("report_period_s", 1.0)
 
@@ -38,6 +74,10 @@ class RouteEgoDiagnosticNode(Node):
 
         self._max_projection_distance_m = float(
             self.get_parameter("max_projection_distance_m").value
+        )
+
+        self._max_heading_error_deg = float(
+            self.get_parameter("max_heading_error_deg").value
         )
 
         self._max_odom_age_s = float(
@@ -50,11 +90,17 @@ class RouteEgoDiagnosticNode(Node):
 
         for name, value in (
             ("max_projection_distance_m", self._max_projection_distance_m),
+            ("max_heading_error_deg", self._max_heading_error_deg),
             ("max_odom_age_s", self._max_odom_age_s),
             ("report_period_s", self._report_period_s),
         ):
             if not math.isfinite(value) or value <= 0.0:
                 raise ValueError(f"{name} must be finite and positive")
+
+        if self._max_heading_error_deg > 180.0:
+            raise ValueError(
+                "max_heading_error_deg cannot exceed 180"
+            )
 
         self._active_route = None
         self._route_points = None
@@ -98,7 +144,6 @@ class RouteEgoDiagnosticNode(Node):
     def _route_callback(self, message: RoutePlan):
         """Validate and cache the active route geometry."""
 
-        # Never retain an older route after a new route message.
         self._active_route = None
         self._route_points = None
 
@@ -137,7 +182,6 @@ class RouteEgoDiagnosticNode(Node):
             )
             return
 
-        # Validate the individual pose frames if populated.
         for pose in path.poses:
             pose_frame = pose.header.frame_id
 
@@ -218,6 +262,17 @@ class RouteEgoDiagnosticNode(Node):
             )
             return
 
+        try:
+            quaternion_to_yaw(message.pose.pose.orientation)
+        except ValueError as exc:
+            self._latest_odom = None
+            self._latest_odom_time = None
+
+            self.get_logger().error(
+                f"Rejecting odometry: {exc}"
+            )
+            return
+
         self._latest_odom = message
         self._latest_odom_time = time.monotonic()
 
@@ -231,7 +286,7 @@ class RouteEgoDiagnosticNode(Node):
             self._odom_received = True
 
     def _report_projection(self):
-        """Report ego projection onto the active route at 1 Hz."""
+        """Report ego route coordinates and heading consistency."""
 
         if (
             self._active_route is None
@@ -251,6 +306,7 @@ class RouteEgoDiagnosticNode(Node):
             return
 
         position = self._latest_odom.pose.pose.position
+        orientation = self._latest_odom.pose.pose.orientation
 
         try:
             projection = project_point_to_polyline(
@@ -258,6 +314,9 @@ class RouteEgoDiagnosticNode(Node):
                 float(position.x),
                 float(position.y),
             )
+
+            ego_yaw = quaternion_to_yaw(orientation)
+
         except (ValueError, OverflowError) as exc:
             self.get_logger().error(
                 f"Route projection failed: {exc}"
@@ -269,6 +328,7 @@ class RouteEgoDiagnosticNode(Node):
             projection.d_m,
             projection.distance_m,
             projection.heading_rad,
+            ego_yaw,
         )
 
         if not all(math.isfinite(v) for v in values):
@@ -277,9 +337,27 @@ class RouteEgoDiagnosticNode(Node):
             )
             return
 
+        heading_error_rad = normalize_angle(
+            ego_yaw - projection.heading_rad
+        )
+
+        heading_error_deg = math.degrees(
+            heading_error_rad
+        )
+
+        ego_yaw_deg = math.degrees(ego_yaw)
+        route_heading_deg = math.degrees(
+            projection.heading_rad
+        )
+
         within_distance_gate = (
             projection.distance_m
             <= self._max_projection_distance_m
+        )
+
+        within_heading_gate = (
+            abs(heading_error_deg)
+            <= self._max_heading_error_deg
         )
 
         self.get_logger().info(
@@ -289,13 +367,19 @@ class RouteEgoDiagnosticNode(Node):
             f"d_m={projection.d_m:.3f} "
             f"distance_m={projection.distance_m:.3f} "
             f"segment={projection.segment_index} "
+            f"ego_yaw_deg={ego_yaw_deg:.2f} "
+            f"route_heading_deg={route_heading_deg:.2f} "
+            f"heading_error_deg={heading_error_deg:.2f} "
             f"distance_gate="
-            f"{'PASS' if within_distance_gate else 'FAIL'}"
+            f"{'PASS' if within_distance_gate else 'FAIL'} "
+            f"heading_gate="
+            f"{'PASS' if within_heading_gate else 'FAIL'}"
         )
 
 
 def main(args=None):
     rclpy.init(args=args)
+
     node = RouteEgoDiagnosticNode()
 
     try:
