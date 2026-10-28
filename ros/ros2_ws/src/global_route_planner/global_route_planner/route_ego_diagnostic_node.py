@@ -17,6 +17,7 @@ from autonomy_interfaces.msg import RoutePlan
 from nav_msgs.msg import Odometry
 
 from global_route_planner.route_geometry import (
+    extract_route_window,
     project_point_to_polyline,
 )
 
@@ -67,6 +68,8 @@ class RouteEgoDiagnosticNode(Node):
         self.declare_parameter("max_heading_error_deg", 45.0)
         self.declare_parameter("max_odom_age_s", 2.0)
         self.declare_parameter("report_period_s", 1.0)
+        self.declare_parameter("window_backward_m", 10.0)
+        self.declare_parameter("window_forward_m", 50.0)
 
         self._frame_id = str(
             self.get_parameter("frame_id").value
@@ -88,6 +91,14 @@ class RouteEgoDiagnosticNode(Node):
             self.get_parameter("report_period_s").value
         )
 
+        self._window_backward_m = float(
+            self.get_parameter("window_backward_m").value
+        )
+
+        self._window_forward_m = float(
+            self.get_parameter("window_forward_m").value
+        )
+
         for name, value in (
             ("max_projection_distance_m", self._max_projection_distance_m),
             ("max_heading_error_deg", self._max_heading_error_deg),
@@ -96,6 +107,15 @@ class RouteEgoDiagnosticNode(Node):
         ):
             if not math.isfinite(value) or value <= 0.0:
                 raise ValueError(f"{name} must be finite and positive")
+
+        for name, value in (
+            ("window_backward_m", self._window_backward_m),
+            ("window_forward_m", self._window_forward_m),
+        ):
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(
+                    f"{name} must be finite and nonnegative"
+                )
 
         if self._max_heading_error_deg > 180.0:
             raise ValueError(
@@ -360,6 +380,24 @@ class RouteEgoDiagnosticNode(Node):
             <= self._max_heading_error_deg
         )
 
+        try:
+            window = extract_route_window(
+                self._route_points,
+                center_s_m=projection.s_m,
+                backward_m=self._window_backward_m,
+                forward_m=self._window_forward_m,
+            )
+        except (ValueError, OverflowError) as exc:
+            self.get_logger().error(
+                f"Local route window failed: {exc}"
+            )
+            return
+
+        window_usable = (
+            window.end_s_m > window.start_s_m
+            and len(window.samples) >= 2
+        )
+
         self.get_logger().info(
             "ego_route_projection "
             f"route_id={self._active_route.route_id} "
@@ -373,7 +411,12 @@ class RouteEgoDiagnosticNode(Node):
             f"distance_gate="
             f"{'PASS' if within_distance_gate else 'FAIL'} "
             f"heading_gate="
-            f"{'PASS' if within_heading_gate else 'FAIL'}"
+            f"{'PASS' if within_heading_gate else 'FAIL'} "
+            f"window_start_s={window.start_s_m:.3f} "
+            f"window_end_s={window.end_s_m:.3f} "
+            f"window_samples={len(window.samples)} "
+            f"window_geometry="
+            f"{'USABLE' if window_usable else 'UNUSABLE'}"
         )
 
 
@@ -388,7 +431,7 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":
