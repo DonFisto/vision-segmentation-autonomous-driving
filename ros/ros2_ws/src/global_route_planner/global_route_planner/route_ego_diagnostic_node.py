@@ -16,6 +16,10 @@ from rclpy.qos import (
 from autonomy_interfaces.msg import LaneMap, RoutePlan
 from nav_msgs.msg import Odometry
 
+from global_route_planner.lane_route_decision import (
+    evaluate_lane_route_association,
+)
+
 from global_route_planner.lane_route_geometry import (
     LanePoint,
     compare_lane_to_route,
@@ -427,6 +431,16 @@ class RouteEgoDiagnosticNode(Node):
                 "reason=EMPTY_LANE_MAP "
                 f"lane_map_revision={lane_map.map_revision}"
             )
+
+            decision = evaluate_lane_route_association(None)
+
+            self.get_logger().info(
+                "lane_route_association "
+                f"route_id={self._active_route.route_id} "
+                f"status={decision.status} "
+                f"reason={decision.reason} "
+                "source=EMPTY_LANE_MAP"
+            )
             return
 
         compared_segments = 0
@@ -467,6 +481,8 @@ class RouteEgoDiagnosticNode(Node):
 
             compared_segments += 1
 
+            decision = evaluate_lane_route_association(result)
+
             self.get_logger().info(
                 "lane_route_comparison "
                 "status=MEASURED "
@@ -489,6 +505,15 @@ class RouteEgoDiagnosticNode(Node):
                 f"projected_s_span_m="
                 f"{result.projected_s_span_m:.3f} "
                 f"lane_odom_delta_s={timestamp_delta_s:.3f}"
+            )
+
+            self.get_logger().info(
+                "lane_route_association "
+                f"route_id={self._active_route.route_id} "
+                f"lane_map_revision={lane_map.map_revision} "
+                f"segment_id={segment.id} "
+                f"status={decision.status} "
+                f"reason={decision.reason}"
             )
 
         if compared_segments == 0:
