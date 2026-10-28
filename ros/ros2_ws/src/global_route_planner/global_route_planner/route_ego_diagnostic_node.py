@@ -13,8 +13,13 @@ from rclpy.qos import (
     qos_profile_sensor_data,
 )
 
-from autonomy_interfaces.msg import RoutePlan
+from autonomy_interfaces.msg import LaneMap, RoutePlan
 from nav_msgs.msg import Odometry
+
+from global_route_planner.lane_route_geometry import (
+    LanePoint,
+    compare_lane_to_route,
+)
 
 from global_route_planner.route_geometry import (
     extract_route_window,
@@ -70,6 +75,8 @@ class RouteEgoDiagnosticNode(Node):
         self.declare_parameter("report_period_s", 1.0)
         self.declare_parameter("window_backward_m", 10.0)
         self.declare_parameter("window_forward_m", 50.0)
+        self.declare_parameter("max_lane_map_age_s", 2.0)
+        self.declare_parameter("max_lane_odom_delta_s", 0.5)
 
         self._frame_id = str(
             self.get_parameter("frame_id").value
@@ -99,11 +106,21 @@ class RouteEgoDiagnosticNode(Node):
             self.get_parameter("window_forward_m").value
         )
 
+        self._max_lane_map_age_s = float(
+            self.get_parameter("max_lane_map_age_s").value
+        )
+
+        self._max_lane_odom_delta_s = float(
+            self.get_parameter("max_lane_odom_delta_s").value
+        )
+
         for name, value in (
             ("max_projection_distance_m", self._max_projection_distance_m),
             ("max_heading_error_deg", self._max_heading_error_deg),
             ("max_odom_age_s", self._max_odom_age_s),
             ("report_period_s", self._report_period_s),
+            ("max_lane_map_age_s", self._max_lane_map_age_s),
+            ("max_lane_odom_delta_s", self._max_lane_odom_delta_s),
         ):
             if not math.isfinite(value) or value <= 0.0:
                 raise ValueError(f"{name} must be finite and positive")
@@ -130,6 +147,9 @@ class RouteEgoDiagnosticNode(Node):
 
         self._odom_received = False
 
+        self._latest_lane_map = None
+        self._latest_lane_map_time = None
+
         route_qos = QoSProfile(
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=1,
@@ -149,6 +169,20 @@ class RouteEgoDiagnosticNode(Node):
             "/carla/hero_odom",
             self._odom_callback,
             qos_profile_sensor_data,
+        )
+
+        lane_qos = QoSProfile(
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=10,
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.VOLATILE,
+        )
+
+        self._lane_subscription = self.create_subscription(
+            LaneMap,
+            "/perception/lane/local_map/vector",
+            self._lane_map_callback,
+            lane_qos,
         )
 
         self._projection_timer = self.create_timer(
@@ -305,6 +339,165 @@ class RouteEgoDiagnosticNode(Node):
 
             self._odom_received = True
 
+
+    def _lane_map_callback(self, message: LaneMap):
+        """Cache the latest perception-derived LaneMap."""
+
+        self._latest_lane_map = message
+        self._latest_lane_map_time = time.monotonic()
+
+    def _report_lane_comparison(
+        self,
+        window,
+        distance_gate,
+        heading_gate,
+    ):
+        """Compare fresh perceived lane geometry against the route."""
+
+        if not distance_gate or not heading_gate:
+            self.get_logger().warn(
+                "lane_route_comparison "
+                "status=SKIPPED "
+                "reason=EGO_ROUTE_GATE_FAILED"
+            )
+            return
+
+        if self._latest_lane_map is None:
+            self.get_logger().warn(
+                "lane_route_comparison "
+                "status=UNAVAILABLE "
+                "reason=NO_LANE_MAP"
+            )
+            return
+
+        lane_map = self._latest_lane_map
+
+        if lane_map.header.frame_id != self._frame_id:
+            self.get_logger().warn(
+                "lane_route_comparison "
+                "status=UNAVAILABLE "
+                "reason=FRAME_MISMATCH"
+            )
+            return
+
+        if (
+            self._latest_lane_map_time is None
+            or time.monotonic() - self._latest_lane_map_time
+            > self._max_lane_map_age_s
+        ):
+            self.get_logger().warn(
+                "lane_route_comparison "
+                "status=UNAVAILABLE "
+                "reason=STALE_LANE_MAP"
+            )
+            return
+
+        def stamp_seconds(stamp):
+            return (
+                float(stamp.sec)
+                + float(stamp.nanosec) * 1e-9
+            )
+
+        lane_stamp = stamp_seconds(lane_map.header.stamp)
+        odom_stamp = stamp_seconds(self._latest_odom.header.stamp)
+
+        if lane_stamp <= 0.0 or odom_stamp <= 0.0:
+            self.get_logger().warn(
+                "lane_route_comparison "
+                "status=UNAVAILABLE "
+                "reason=INVALID_TIMESTAMP"
+            )
+            return
+
+        timestamp_delta_s = lane_stamp - odom_stamp
+
+        if abs(timestamp_delta_s) > self._max_lane_odom_delta_s:
+            self.get_logger().warn(
+                "lane_route_comparison "
+                "status=UNAVAILABLE "
+                "reason=TIMESTAMP_MISMATCH "
+                f"delta_s={timestamp_delta_s:.3f}"
+            )
+            return
+
+        if not lane_map.segments:
+            self.get_logger().info(
+                "lane_route_comparison "
+                "status=UNAVAILABLE "
+                "reason=EMPTY_LANE_MAP "
+                f"lane_map_revision={lane_map.map_revision}"
+            )
+            return
+
+        compared_segments = 0
+
+        for segment in lane_map.segments:
+            if not segment.drivable or len(segment.centerline) < 2:
+                continue
+
+            try:
+                lane_points = [
+                    LanePoint(
+                        x_m=float(sample.pose.position.x),
+                        y_m=float(sample.pose.position.y),
+                        heading_rad=quaternion_to_yaw(
+                            sample.pose.orientation
+                        ),
+                        confidence=float(sample.confidence),
+                    )
+                    for sample in segment.centerline
+                ]
+
+                result = compare_lane_to_route(
+                    window,
+                    lane_points,
+                )
+
+            except (ValueError, OverflowError) as exc:
+                self.get_logger().warn(
+                    "lane_route_comparison "
+                    "status=INVALID_SEGMENT "
+                    f"segment_id={segment.id} "
+                    f"reason={exc}"
+                )
+                continue
+
+            if result is None:
+                continue
+
+            compared_segments += 1
+
+            self.get_logger().info(
+                "lane_route_comparison "
+                "status=MEASURED "
+                f"route_id={self._active_route.route_id} "
+                f"lane_map_revision={lane_map.map_revision} "
+                f"segment_id={segment.id} "
+                f"samples={result.sample_count} "
+                f"median_distance_m="
+                f"{result.median_distance_m:.3f} "
+                f"median_abs_lateral_m="
+                f"{result.median_abs_lateral_m:.3f} "
+                f"median_heading_error_deg="
+                f"{result.median_abs_heading_error_deg:.2f} "
+                f"median_confidence="
+                f"{result.median_confidence:.3f} "
+                f"projected_s_start_m="
+                f"{result.min_route_s_m:.3f} "
+                f"projected_s_end_m="
+                f"{result.max_route_s_m:.3f} "
+                f"projected_s_span_m="
+                f"{result.projected_s_span_m:.3f} "
+                f"lane_odom_delta_s={timestamp_delta_s:.3f}"
+            )
+
+        if compared_segments == 0:
+            self.get_logger().warn(
+                "lane_route_comparison "
+                "status=UNAVAILABLE "
+                "reason=NO_USABLE_SEGMENTS"
+            )
+
     def _report_projection(self):
         """Report ego route coordinates and heading consistency."""
 
@@ -418,6 +611,13 @@ class RouteEgoDiagnosticNode(Node):
             f"window_geometry="
             f"{'USABLE' if window_usable else 'UNUSABLE'}"
         )
+
+        if window_usable:
+            self._report_lane_comparison(
+                window,
+                within_distance_gate,
+                within_heading_gate,
+            )
 
 
 def main(args=None):
