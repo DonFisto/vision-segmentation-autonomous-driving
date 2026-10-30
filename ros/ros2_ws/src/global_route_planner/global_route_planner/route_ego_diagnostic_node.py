@@ -20,6 +20,10 @@ from global_route_planner.lane_route_coverage import (
     estimate_lane_route_coverage,
 )
 
+from global_route_planner.lane_route_forward_coverage import (
+    summarize_forward_coverage,
+)
+
 from global_route_planner.lane_route_decision import (
     evaluate_lane_route_association,
 )
@@ -357,6 +361,7 @@ class RouteEgoDiagnosticNode(Node):
     def _report_lane_comparison(
         self,
         window,
+        ego_s_m,
         distance_gate,
         heading_gate,
     ):
@@ -525,6 +530,12 @@ class RouteEgoDiagnosticNode(Node):
                     window,
                     lane_points,
                 )
+
+                forward_coverage = summarize_forward_coverage(
+                    coverage,
+                    window,
+                    ego_s_m,
+                )
             except (ValueError, OverflowError) as exc:
                 self.get_logger().warn(
                     "lane_route_coverage "
@@ -554,6 +565,34 @@ class RouteEgoDiagnosticNode(Node):
                 f"{coverage.connected_pair_count} "
                 f"interval_count="
                 f"{len(coverage.supported_intervals)}"
+            )
+
+            first_gap = (
+                "none"
+                if forward_coverage.first_support_gap_m is None
+                else f"{forward_coverage.first_support_gap_m:.3f}"
+            )
+
+            self.get_logger().info(
+                "lane_route_forward_coverage "
+                "status=MEASURED "
+                f"route_id={self._active_route.route_id} "
+                f"lane_map_revision={lane_map.map_revision} "
+                f"segment_id={segment.id} "
+                f"ego_s_m={ego_s_m:.3f} "
+                f"forward_window_length_m="
+                f"{forward_coverage.forward_window_length_m:.3f} "
+                f"supported_ahead_m="
+                f"{forward_coverage.supported_ahead_m:.3f} "
+                f"coverage_ratio_ahead="
+                f"{forward_coverage.coverage_ratio_ahead:.3f} "
+                f"longest_contiguous_ahead_m="
+                f"{forward_coverage.longest_contiguous_ahead_m:.3f} "
+                f"continuous_from_ego_m="
+                f"{forward_coverage.continuous_from_ego_m:.3f} "
+                f"first_support_gap_m={first_gap} "
+                f"interval_count_ahead="
+                f"{len(forward_coverage.supported_intervals_ahead)}"
             )
 
         if compared_segments == 0:
@@ -680,6 +719,7 @@ class RouteEgoDiagnosticNode(Node):
         if window_usable:
             self._report_lane_comparison(
                 window,
+                projection.s_m,
                 within_distance_gate,
                 within_heading_gate,
             )
