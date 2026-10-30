@@ -16,6 +16,10 @@ from rclpy.qos import (
 from autonomy_interfaces.msg import LaneMap, RoutePlan
 from nav_msgs.msg import Odometry
 
+from global_route_planner.lane_route_coverage import (
+    estimate_lane_route_coverage,
+)
+
 from global_route_planner.lane_route_decision import (
     evaluate_lane_route_association,
 )
@@ -514,6 +518,42 @@ class RouteEgoDiagnosticNode(Node):
                 f"segment_id={segment.id} "
                 f"status={decision.status} "
                 f"reason={decision.reason}"
+            )
+
+            try:
+                coverage = estimate_lane_route_coverage(
+                    window,
+                    lane_points,
+                )
+            except (ValueError, OverflowError) as exc:
+                self.get_logger().warn(
+                    "lane_route_coverage "
+                    "status=INVALID "
+                    f"segment_id={segment.id} "
+                    f"reason={exc}"
+                )
+                continue
+
+            self.get_logger().info(
+                "lane_route_coverage "
+                "status=MEASURED "
+                f"route_id={self._active_route.route_id} "
+                f"lane_map_revision={lane_map.map_revision} "
+                f"segment_id={segment.id} "
+                f"window_length_m="
+                f"{coverage.window_length_m:.3f} "
+                f"supported_length_m="
+                f"{coverage.supported_length_m:.3f} "
+                f"coverage_ratio="
+                f"{coverage.coverage_ratio:.3f} "
+                f"longest_contiguous_m="
+                f"{coverage.longest_contiguous_m:.3f} "
+                f"valid_samples="
+                f"{coverage.valid_sample_count} "
+                f"connected_pairs="
+                f"{coverage.connected_pair_count} "
+                f"interval_count="
+                f"{len(coverage.supported_intervals)}"
             )
 
         if compared_segments == 0:
