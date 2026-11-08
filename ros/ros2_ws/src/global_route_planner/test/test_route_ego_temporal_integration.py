@@ -320,5 +320,67 @@ class TestRouteEgoTemporalIntegration(unittest.TestCase):
         self.assertEqual(snap.observations_in_revision, 1)
 
 
+    def test_previous_mapper_session_cannot_replay(self):
+        self.process(1, session=42)
+        self.process(1, session=43)
+
+        result = self.process(2, session=42)
+
+        self.assertEqual(self.node._active_map_session_id, 43)
+        self.assertEqual(result.status, "CANDIDATE")
+        self.assertEqual(result.observations_in_revision, 1)
+
+    def test_clock_regression_recovers_with_new_evidence(self):
+        self.process(1)
+
+        odom = self.odometry()
+        odom.header.stamp.sec = 900
+        self.node._odom_callback(odom)
+
+        # Trigger the clock-regression reset.
+        msg = self.lane_map(2)
+        msg.header.stamp.sec = 900
+        msg.latest_evidence_stamp.sec = 899
+
+        self.node._lane_map_callback(msg)
+        self.node._report_projection()
+
+        snapshot = self.node._temporal_support.snapshot(
+            time.monotonic()
+        )
+        self.assertEqual(snapshot.status, "WAITING")
+
+        # The same previously integrated evidence must not revive
+        # positive support after the clock reset.
+        msg = self.lane_map(2, evidence=1)
+        msg.header.stamp.sec = 900
+        msg.latest_evidence_stamp.sec = 899
+
+        self.node._lane_map_callback(msg)
+        self.node._report_projection()
+
+        snapshot = self.node._temporal_support.snapshot(
+            time.monotonic()
+        )
+        self.assertEqual(snapshot.status, "WAITING")
+
+        # A new integration, with a timestamp valid in the reset
+        # clock domain, can begin a fresh confirmation streak.
+        msg = self.lane_map(3, evidence=2)
+        msg.header.stamp.sec = 900
+        msg.latest_evidence_stamp.sec = 899
+
+        self.node._lane_map_callback(msg)
+        self.node._report_projection()
+
+        snapshot = self.node._temporal_support.snapshot(
+            time.monotonic()
+        )
+
+        self.assertEqual(snapshot.status, "CANDIDATE")
+        self.assertEqual(snapshot.consecutive_supported, 1)
+        self.assertEqual(snapshot.observations_in_revision, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

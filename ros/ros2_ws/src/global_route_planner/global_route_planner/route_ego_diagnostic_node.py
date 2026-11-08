@@ -187,6 +187,9 @@ class RouteEgoDiagnosticNode(Node):
         self._last_route_identity = None
         self._last_accepted_provenance = None
         self._last_reference_stamp_ns = None
+        self._active_map_session_id = None
+        self._seen_map_session_ids = set()
+        self._clock_reset_evidence_floor = None
 
         route_qos = QoSProfile(
             history=QoSHistoryPolicy.KEEP_LAST,
@@ -561,6 +564,19 @@ class RouteEgoDiagnosticNode(Node):
                 self._latest_odom.header.stamp
             )
 
+            if (
+                self._active_map_session_id is not None
+                and provenance.session_id != self._active_map_session_id
+                and provenance.session_id in self._seen_map_session_ids
+            ):
+                self.get_logger().warn(
+                    "route_support_observation "
+                    "status=SKIPPED "
+                    "reason=PREVIOUS_MAPPER_SESSION "
+                    f"map_session_id={provenance.session_id}"
+                )
+                return
+
             clock = classify_evidence_time(
                 evidence_stamp_ns=provenance.latest_evidence_stamp_ns,
                 reference_stamp_ns=reference_ns,
@@ -570,6 +586,15 @@ class RouteEgoDiagnosticNode(Node):
             )
 
             if clock.reset_temporal_history:
+                previous_map = self._last_accepted_provenance
+
+                if previous_map is not None:
+                    self._clock_reset_evidence_floor = (
+                        previous_map.session_id,
+                        previous_map.evidence_revision,
+                    )
+
+                self._last_accepted_provenance = None
                 self._temporal_support.reset_evidence_history()
                 self._last_reference_stamp_ns = reference_ns
 
@@ -581,6 +606,25 @@ class RouteEgoDiagnosticNode(Node):
                 return
 
             self._last_reference_stamp_ns = reference_ns
+
+            if self._clock_reset_evidence_floor is not None:
+                floor_session, floor_revision = (
+                    self._clock_reset_evidence_floor
+                )
+
+                if (
+                    provenance.session_id == floor_session
+                    and (
+                        provenance.evidence_revision <= floor_revision
+                        or not clock.may_confirm_positive
+                    )
+                ):
+                    self.get_logger().warn(
+                        "route_support_observation "
+                        "status=SKIPPED "
+                        "reason=WAITING_FOR_POST_RESET_EVIDENCE"
+                    )
+                    return
 
             admission = classify_lane_map_provenance(
                 self._last_accepted_provenance,
@@ -600,6 +644,9 @@ class RouteEgoDiagnosticNode(Node):
                 self._temporal_support.reset_evidence_history()
 
             self._last_accepted_provenance = provenance
+            self._active_map_session_id = provenance.session_id
+            self._seen_map_session_ids.add(provenance.session_id)
+            self._clock_reset_evidence_floor = None
 
             selection = select_lane_map_support(candidates)
             decision = selection.decision
