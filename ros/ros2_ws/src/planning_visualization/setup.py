@@ -27,6 +27,10 @@ setup(
         "console_scripts": [
             "route_plan_visualizer_node = "
             "planning_visualization.route_plan_visualizer_node:main",
+            "lane_map_visualizer_node = "
+            "planning_visualization.lane_map_visualizer_node:main",
+            "route_association_visualizer_node = "
+            "planning_visualization.route_association_visualizer_node:main",
             "odom_tf_broadcaster_node = "
             "planning_visualization.odom_tf_broadcaster_node:main",
             "global_lane_graph_visualizer_node = "
