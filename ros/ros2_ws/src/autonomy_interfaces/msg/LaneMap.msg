@@ -2,6 +2,9 @@ std_msgs/Header header
 
 uint32 schema_version
 uint64 map_revision
+uint64 map_session_id
+uint64 evidence_revision
+builtin_interfaces/Time latest_evidence_stamp
 
 bool globally_consistent
 float32 forward_horizon_m

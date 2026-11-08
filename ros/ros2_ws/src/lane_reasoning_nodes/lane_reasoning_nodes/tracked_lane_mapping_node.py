@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import secrets
 from collections import Counter, deque
 from dataclasses import dataclass
 from typing import Any
@@ -52,6 +53,41 @@ class SideBinEvidence:
     support_count: np.ndarray
     freshness: np.ndarray
     consistency: np.ndarray
+
+
+
+def populate_lane_map_provenance(
+    message: LaneMap,
+    session_id: int,
+    map_revision: int,
+    evidence_revision: int,
+    active_evidence_stamp_ns: int | None,
+) -> None:
+    """Attach mapper-session and integrated-evidence provenance.
+
+    A map revision can change during pruning without new perception.
+    evidence_revision changes only after a successful integration.
+    """
+
+    message.schema_version = 3
+    message.map_revision = int(map_revision)
+    message.map_session_id = int(session_id)
+    message.evidence_revision = int(evidence_revision)
+
+    stamp_ns = (
+        0 if active_evidence_stamp_ns is None
+        else int(active_evidence_stamp_ns)
+    )
+
+    if stamp_ns < 0:
+        raise ValueError("Evidence timestamp cannot be negative")
+
+    message.latest_evidence_stamp.sec = (
+        stamp_ns // 1_000_000_000
+    )
+    message.latest_evidence_stamp.nanosec = (
+        stamp_ns % 1_000_000_000
+    )
 
 
 class TrackedLaneMappingNode(Node):
@@ -243,6 +279,7 @@ class TrackedLaneMappingNode(Node):
         self.processed_stamps: deque[int] = deque(maxlen=512)
         self.processed_stamp_set: set[int] = set()
 
+        self.map_session_id = secrets.randbits(64) or 1
         self.map_revision = 0
         self.received_path_messages = 0
         self.received_status_messages = 0
@@ -1204,8 +1241,16 @@ class TrackedLaneMappingNode(Node):
             pose.stamp_ns % 1_000_000_000
         )
         message.header.frame_id = self.world_frame_id
-        message.schema_version = 2
-        message.map_revision = int(self.map_revision)
+        populate_lane_map_provenance(
+            message,
+            session_id=self.map_session_id,
+            map_revision=self.map_revision,
+            evidence_revision=self.integrated_frames,
+            active_evidence_stamp_ns=(
+                self.observations[-1].stamp_ns
+                if self.observations else None
+            ),
+        )
         message.globally_consistent = False
         message.forward_horizon_m = float(self.forward_horizon_m)
         message.backward_horizon_m = float(self.backward_horizon_m)
@@ -1499,7 +1544,7 @@ class TrackedLaneMappingNode(Node):
         current_odom_age_ns: int | None,
     ) -> None:
         status = {
-            "schema_version": 2,
+            "schema_version": 3,
             "map_revision": self.map_revision,
             "world_frame_id": self.world_frame_id,
             "ego_frame_id": self.ego_frame_id,
