@@ -180,4 +180,39 @@ tmux send-keys -t "$SESSION:visualization.2" \
   C-m
 
 
+
+# ============================================================
+# Window 3: LaneMap–RoutePlan association observability
+# ============================================================
+
+tmux new-window -d -t "$SESSION" -n association
+tmux split-window -h -t "$SESSION:association.0"
+tmux split-window -v -t "$SESSION:association.0"
+tmux split-window -v -t "$SESSION:association.1"
+tmux select-layout -t "$SESSION:association" tiled
+
+connect_pane "$SESSION:association.0"
+remote_depth_shell "$SESSION:association.0"
+wait_topic "$SESSION:association.0" "/carla/hero_odom" "hero odometry"
+tmux send-keys -t "$SESSION:association.0" \
+  "ros2 run global_route_planner route_ego_diagnostic_node" C-m
+
+connect_pane "$SESSION:association.1"
+remote_depth_shell "$SESSION:association.1"
+wait_topic "$SESSION:association.1" "/perception/lane/local_map/vector" "LaneMap"
+tmux send-keys -t "$SESSION:association.1" \
+  "ros2 run planning_visualization lane_map_visualizer_node" C-m
+
+connect_pane "$SESSION:association.2"
+remote_depth_shell "$SESSION:association.2"
+wait_topic "$SESSION:association.2" "/planning/route_plan" "RoutePlan"
+tmux send-keys -t "$SESSION:association.2" \
+  "ros2 run planning_visualization route_association_visualizer_node" C-m
+
+connect_pane "$SESSION:association.3"
+remote_depth_shell "$SESSION:association.3"
+tmux send-keys -t "$SESSION:association.3" \
+  "watch -n 2 'ros2 topic info /planning/route_association/status; ros2 topic info /planning/route_association/markers_viz; ros2 topic info /perception/viz/lane/map_markers'" C-m
+
+
 finish_session "$SESSION" planning

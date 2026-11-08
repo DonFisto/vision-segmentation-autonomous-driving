@@ -1,0 +1,140 @@
+{
+  "configById": {
+    "3D!association": {
+      "foxglovePanelTitle": "Lane–Route Association",
+      "cameraState": {
+        "perspective": false,
+        "distance": 75,
+        "phi": 0,
+        "thetaOffset": 0,
+        "targetOffset": [0, 0, 0],
+        "target": [0, 0, 0],
+        "targetOrientation": [0, 0, 0, 1],
+        "fovy": 45,
+        "near": 0.5,
+        "far": 5000
+      },
+      "followMode": "follow-pose",
+      "followTf": "hero_viz",
+      "topics": {
+        "/planning/route_path_viz": {
+          "visible": true
+        },
+        "/planning/global_lane_graph/markers_viz": {
+          "visible": false
+        },
+        "/perception/viz/lane/tracked_centerline": {
+          "visible": false
+        },
+        "/perception/viz/lane/map_markers": {
+          "visible": true
+        },
+        "/planning/route_association/markers_viz": {
+          "visible": true
+        }
+      },
+      "layers": {},
+      "transforms": {},
+      "scene": {}
+    },
+    "RawMessages!association": {
+      "foxglovePanelTitle": "Association State",
+      "topicPath": "/planning/route_association/status"
+    },
+    "RawMessages!map": {
+      "foxglovePanelTitle": "LaneMap Provenance",
+      "topicPath": "/perception/lane/local_map/vector"
+    },
+    "StateTransitions!association": {
+      "foxglovePanelTitle": "Route Support Transitions",
+      "paths": [
+        {
+          "value": "/planning/route_association/status.temporal_status",
+          "label": "Temporal support",
+          "enabled": true
+        },
+        {
+          "value": "/planning/route_association/status.decision_status",
+          "label": "Support decision",
+          "enabled": true
+        },
+        {
+          "value": "/planning/route_association/status.provenance_status",
+          "label": "Evidence provenance",
+          "enabled": true
+        },
+        {
+          "value": "/planning/route_association/status.evidence_time_status",
+          "label": "Evidence clock",
+          "enabled": true
+        }
+      ]
+    },
+    "Plot!association": {
+      "foxglovePanelTitle": "Coverage and Freshness",
+      "xAxisVal": "timestamp",
+      "paths": [
+        {
+          "value": "/planning/route_association/status.coverage_ratio_ahead",
+          "label": "Coverage ahead",
+          "enabled": true,
+          "color": "#22c55e"
+        },
+        {
+          "value": "/planning/route_association/status.median_abs_lateral_m",
+          "label": "Median lateral error",
+          "enabled": true,
+          "color": "#38bdf8"
+        },
+        {
+          "value": "/planning/route_association/status.evidence_age_s",
+          "label": "Evidence age",
+          "enabled": true,
+          "color": "#eab308"
+        }
+      ],
+      "timeRange": "latest",
+      "timeWindowMode": "sliding",
+      "followingViewWidth": 60
+    },
+    "Image!mapper": {
+      "foxglovePanelTitle": "Rolling LaneMap",
+      "imageMode": {
+        "imageTopic": "/perception/lane/local_map/debug/compressed",
+        "calibrationTopic": ""
+      }
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "linkedGlobalVariables": [],
+  "playbackConfig": {
+    "speed": 1
+  },
+  "layout": {
+    "direction": "row",
+    "first": "3D!association",
+    "second": {
+      "direction": "column",
+      "first": {
+        "direction": "row",
+        "first": "StateTransitions!association",
+        "second": "Plot!association",
+        "splitPercentage": 48
+      },
+      "second": {
+        "direction": "row",
+        "first": "Image!mapper",
+        "second": {
+          "direction": "column",
+          "first": "RawMessages!association",
+          "second": "RawMessages!map",
+          "splitPercentage": 58
+        },
+        "splitPercentage": 44
+      },
+      "splitPercentage": 45
+    },
+    "splitPercentage": 56
+  }
+}
