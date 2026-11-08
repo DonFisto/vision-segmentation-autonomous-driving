@@ -1,5 +1,6 @@
 """Diagnose live RoutePlan and ego odometry integration."""
 
+import copy
 import math
 import time
 
@@ -13,7 +14,9 @@ from rclpy.qos import (
     qos_profile_sensor_data,
 )
 
-from autonomy_interfaces.msg import LaneMap, RoutePlan
+from autonomy_interfaces.msg import (
+    LaneMap, RoutePlan, RouteAssociationStatus,
+)
 from nav_msgs.msg import Odometry
 
 from global_route_planner.lane_route_coverage import (
@@ -187,6 +190,7 @@ class RouteEgoDiagnosticNode(Node):
         self._last_route_identity = None
         self._last_accepted_provenance = None
         self._last_reference_stamp_ns = None
+        self._last_association_status = None
         self._active_map_session_id = None
         self._seen_map_session_ids = set()
         self._clock_reset_evidence_floor = None
@@ -224,6 +228,12 @@ class RouteEgoDiagnosticNode(Node):
             "/perception/lane/local_map/vector",
             self._lane_map_callback,
             lane_qos,
+        )
+
+        self._association_publisher = self.create_publisher(
+            RouteAssociationStatus,
+            "/planning/route_association/status",
+            10,
         )
 
         self._projection_timer = self.create_timer(
@@ -326,6 +336,7 @@ class RouteEgoDiagnosticNode(Node):
             self._active_route = None
             self._route_points = None
             self._temporal_support = TemporalRouteSupportTracker()
+            self._last_association_status = None
 
             self.get_logger().warn(
                 "RoutePlan not valid: "
@@ -415,6 +426,15 @@ class RouteEgoDiagnosticNode(Node):
 
         self._route_points = points
         self._active_route = message
+        if (
+            self._last_association_status is not None
+            and (
+                self._last_association_status.mission_id != message.mission_id
+                or self._last_association_status.route_id != message.route_id
+                or self._last_association_status.route_map_revision != message.map_revision
+            )
+        ):
+            self._last_association_status = None
         self._last_route_identity = identity
 
         self.get_logger().info(
@@ -529,7 +549,119 @@ class RouteEgoDiagnosticNode(Node):
         )
         return result
 
-    def _record_selected_support(self, lane_map, candidates):
+
+    def _publish_association_status(
+        self, lane_map, provenance, clock, admission,
+        selection, snapshot, metrics, effective_decision=None,
+    ):
+        """Publish the accepted association and temporal diagnostic."""
+
+        identity = self._temporal_support.route_identity
+
+        if identity is None:
+            return
+
+        message = RouteAssociationStatus()
+        message.header = copy.deepcopy(lane_map.header)
+
+        message.mission_id = int(identity.mission_id)
+        message.route_id = int(identity.route_id)
+        message.route_map_revision = int(identity.map_revision)
+
+        message.map_session_id = provenance.session_id
+        message.lane_map_revision = provenance.map_revision
+        message.evidence_revision = provenance.evidence_revision
+
+        message.selected_segment_valid = (
+            selection.selected_segment_id is not None
+        )
+
+        if message.selected_segment_valid:
+            message.selected_segment_id = int(
+                selection.selected_segment_id
+            )
+
+        decision = effective_decision or selection.decision
+
+        message.decision_status = decision.status
+        message.decision_reason = decision.reason
+        message.temporal_status = snapshot.status
+        message.temporal_reason = snapshot.reason
+
+        message.selection_reason = selection.selection_reason
+        message.provenance_status = admission.status
+        message.evidence_time_status = clock.status
+
+        message.candidate_count = selection.candidate_count
+        message.supported_candidate_count = (
+            selection.supported_candidate_count
+        )
+        message.consecutive_supported = (
+            snapshot.consecutive_supported
+        )
+
+        message.evidence_age_s = (
+            float(clock.evidence_age_s)
+            if clock.evidence_age_s is not None
+            else float("nan")
+        )
+        message.temporal_observation_age_s = (
+            float(snapshot.latest_observation_age_s)
+            if snapshot.latest_observation_age_s is not None
+            else float("nan")
+        )
+
+        message.median_abs_lateral_m = float("nan")
+        message.median_heading_error_deg = float("nan")
+
+        chosen = (metrics or {}).get(
+            selection.selected_segment_id
+        )
+
+        if chosen is not None:
+            comparison, forward, ego_s_m, window = chosen
+
+            message.metrics_valid = True
+            message.median_abs_lateral_m = float(
+                comparison.median_abs_lateral_m
+            )
+            message.median_heading_error_deg = float(
+                comparison.median_abs_heading_error_deg
+            )
+
+            message.coverage_ratio_ahead = float(
+                forward.coverage_ratio_ahead
+            )
+            message.supported_ahead_m = float(
+                forward.supported_ahead_m
+            )
+            message.continuous_from_ego_m = float(
+                forward.continuous_from_ego_m
+            )
+
+            message.ego_s_m = float(ego_s_m)
+            message.window_start_s_m = float(
+                window.start_s_m
+            )
+            message.window_end_s_m = float(
+                window.end_s_m
+            )
+
+            intervals = forward.supported_intervals_ahead
+
+            message.supported_interval_start_s_m = [
+                float(a) for a, _ in intervals
+            ]
+            message.supported_interval_end_s_m = [
+                float(b) for _, b in intervals
+            ]
+
+        self._last_association_status = message
+        self._association_publisher.publish(message)
+
+    def _record_selected_support(
+        self, lane_map, candidates, metrics=None
+    ):
         """Admit one map update using evidence and clock provenance."""
 
         identity = self._temporal_support.route_identity
@@ -586,6 +718,7 @@ class RouteEgoDiagnosticNode(Node):
             )
 
             if clock.reset_temporal_history:
+                self._last_association_status = None
                 previous_map = self._last_accepted_provenance
 
                 if previous_map is not None:
@@ -676,6 +809,12 @@ class RouteEgoDiagnosticNode(Node):
                         f"map_revision={provenance.map_revision} "
                         f"evidence_revision={provenance.evidence_revision}"
                     )
+                    self._publish_association_status(
+                        lane_map, provenance, clock, admission,
+                        selection,
+                        self._temporal_support.snapshot(time.monotonic()),
+                        metrics,
+                    )
                     return
 
             elif not admission.may_apply_negative:
@@ -686,6 +825,10 @@ class RouteEgoDiagnosticNode(Node):
                 decision,
                 observed_at_s=time.monotonic(),
                 lane_map_revision=provenance.map_revision,
+            )
+            self._publish_association_status(
+                lane_map, provenance, clock, admission,
+                selection, snapshot, metrics, decision,
             )
 
         except (ValueError, TypeError, OverflowError) as exc:
@@ -723,6 +866,52 @@ class RouteEgoDiagnosticNode(Node):
 
         if identity is None:
             return
+        cached = self._last_association_status
+
+        if (
+            cached is not None
+            and cached.mission_id == identity.mission_id
+            and cached.route_id == identity.route_id
+            and cached.route_map_revision == identity.map_revision
+        ):
+            status = copy.deepcopy(cached)
+        else:
+            status = RouteAssociationStatus()
+            status.mission_id = int(identity.mission_id)
+            status.route_id = int(identity.route_id)
+            status.route_map_revision = int(identity.map_revision)
+            status.decision_status = "UNAVAILABLE"
+            status.decision_reason = "NO_EVALUATED_LANE_MAP"
+            status.evidence_age_s = float("nan")
+
+        status.header.frame_id = self._frame_id
+
+        if self._latest_odom is not None:
+            status.header.stamp = copy.deepcopy(
+                self._latest_odom.header.stamp
+            )
+
+        status.temporal_status = snapshot.status
+        status.temporal_reason = snapshot.reason
+        status.consecutive_supported = snapshot.consecutive_supported
+
+        status.temporal_observation_age_s = (
+            float(snapshot.latest_observation_age_s)
+            if snapshot.latest_observation_age_s is not None
+            else float("nan")
+        )
+
+        if snapshot.status in (
+            "WAITING",
+            "STALE",
+            "UNAVAILABLE",
+        ):
+            status.metrics_valid = False
+            status.selected_segment_valid = False
+            status.supported_interval_start_s_m = []
+            status.supported_interval_end_s_m = []
+
+        self._association_publisher.publish(status)
 
         age = (
             "none"
@@ -853,6 +1042,7 @@ class RouteEgoDiagnosticNode(Node):
 
         compared_segments = 0
         support_candidates = []
+        support_metrics = {}
 
         for segment in lane_map.segments:
             if not segment.drivable or len(segment.centerline) < 2:
@@ -1003,6 +1193,9 @@ class RouteEgoDiagnosticNode(Node):
             )
 
             if support_decision is not None:
+                support_metrics[int(segment.id)] = (
+                    result, forward_coverage, ego_s_m, window,
+                )
                 support_candidates.append(
                     SegmentSupportCandidate(
                         segment_id=int(segment.id),
@@ -1013,6 +1206,7 @@ class RouteEgoDiagnosticNode(Node):
         self._record_selected_support(
             lane_map,
             support_candidates,
+            support_metrics,
         )
 
         if compared_segments == 0:

@@ -86,6 +86,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/LaneSegment.msg"
   "msg/LaneMap.msg"
   "msg/RoutePlan.msg"
+  "msg/RouteAssociationStatus.msg"
   "msg/TrajectoryPoint.msg"
   "msg/Trajectory.msg"
   DEPENDENCIES

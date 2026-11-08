@@ -382,5 +382,56 @@ class TestRouteEgoTemporalIntegration(unittest.TestCase):
         self.assertEqual(snapshot.observations_in_revision, 1)
 
 
+    def test_published_association_status_matches_decision(self):
+        self.process(1)
+        status = self.node._last_association_status
+
+        self.assertIsNotNone(status)
+        self.assertEqual(status.route_id, 1)
+        self.assertEqual(status.map_session_id, 42)
+        self.assertEqual(status.evidence_revision, 1)
+        self.assertEqual(status.selected_segment_id, 7)
+        self.assertTrue(status.selected_segment_valid)
+        self.assertEqual(status.temporal_status, "CANDIDATE")
+        self.assertTrue(status.metrics_valid)
+        self.assertGreater(status.coverage_ratio_ahead, 0.0)
+        self.assertEqual(
+            len(status.supported_interval_start_s_m),
+            len(status.supported_interval_end_s_m),
+        )
+
+    def test_published_status_tracks_temporal_confirmation(self):
+        for revision in (1, 2, 3):
+            self.process(revision)
+
+        status = self.node._last_association_status
+
+        self.assertEqual(status.temporal_status, "SUPPORTED")
+        self.assertEqual(status.consecutive_supported, 3)
+
+    def test_pruning_only_status_cannot_advance_confirmation(self):
+        self.process(1)
+        self.process(2, evidence=1)
+
+        status = self.node._last_association_status
+
+        self.assertEqual(
+            status.provenance_status,
+            "MAP_ONLY_CHANGE",
+        )
+        self.assertEqual(status.evidence_revision, 1)
+        self.assertEqual(status.consecutive_supported, 1)
+
+    def test_empty_map_status_clears_selected_segment(self):
+        self.process(1)
+        self.process(2, (), evidence=1)
+
+        status = self.node._last_association_status
+
+        self.assertEqual(status.decision_status, "UNAVAILABLE")
+        self.assertFalse(status.selected_segment_valid)
+        self.assertFalse(status.metrics_valid)
+
+
 if __name__ == "__main__":
     unittest.main()
