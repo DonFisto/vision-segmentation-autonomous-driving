@@ -1,0 +1,201 @@
+"""Synthetic ROS2-message tests for route-support diagnostic callbacks."""
+
+import time
+import unittest
+
+import rclpy
+from autonomy_interfaces.msg import (
+    LaneMap,
+    LaneSample,
+    LaneSegment,
+    RoutePlan,
+)
+from geometry_msgs.msg import PoseStamped
+from nav_msgs.msg import Odometry
+
+from global_route_planner.route_ego_diagnostic_node import (
+    RouteEgoDiagnosticNode,
+)
+
+
+class TestRouteEgoTemporalIntegration(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls._owns_context = not rclpy.ok()
+        if cls._owns_context:
+            rclpy.init(args=[])
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls._owns_context and rclpy.ok():
+            rclpy.shutdown()
+
+    def setUp(self):
+        self.node = RouteEgoDiagnosticNode()
+        self.node._route_callback(self.route())
+        self.node._odom_callback(self.odometry())
+
+    def tearDown(self):
+        self.node.destroy_node()
+
+    def route(self, revision=1, start=0.0, valid=True):
+        msg = RoutePlan()
+        msg.header.frame_id = "carla_world"
+        msg.mission_id = 123
+        msg.route_id = revision
+        msg.map_revision = 7
+        msg.status = (
+            RoutePlan.STATUS_VALID
+            if valid else RoutePlan.STATUS_INVALID
+        )
+
+        msg.coarse_reference_path.header.frame_id = "carla_world"
+
+        if valid:
+            for x in (start, 60.0):
+                pose = PoseStamped()
+                pose.header.frame_id = "carla_world"
+                pose.pose.position.x = float(x)
+                pose.pose.orientation.w = 1.0
+                msg.coarse_reference_path.poses.append(pose)
+
+        return msg
+
+    def odometry(self):
+        msg = Odometry()
+        msg.header.frame_id = "carla_world"
+        msg.header.stamp.sec = 1000
+        msg.pose.pose.orientation.w = 1.0
+        return msg
+
+    def lane_map(self, revision, segment_ids=(7,)):
+        msg = LaneMap()
+        msg.header.frame_id = "carla_world"
+        msg.header.stamp.sec = 1000
+        msg.schema_version = 2
+        msg.map_revision = revision
+
+        for segment_id in segment_ids:
+            segment = LaneSegment()
+            segment.id = segment_id
+            segment.drivable = True
+            segment.confidence = 1.0
+
+            for x in range(36):
+                sample = LaneSample()
+                sample.s = float(x)
+                sample.pose.position.x = float(x)
+                sample.pose.orientation.w = 1.0
+                sample.confidence = 0.95
+                segment.centerline.append(sample)
+
+            msg.segments.append(segment)
+
+        return msg
+
+    def process(self, revision, segment_ids=(7,)):
+        self.node._lane_map_callback(
+            self.lane_map(revision, segment_ids)
+        )
+        self.node._report_projection()
+        return self.node._temporal_support.snapshot(
+            time.monotonic()
+        )
+
+    def test_no_lane_map_remains_waiting(self):
+        self.node._report_projection()
+        self.assertEqual(
+            self.node._temporal_support.snapshot(
+                time.monotonic()
+            ).status,
+            "WAITING",
+        )
+
+    def test_three_revisions_confirm_support(self):
+        self.assertEqual(self.process(1).status, "CANDIDATE")
+        self.assertEqual(self.process(2).status, "CANDIDATE")
+        result = self.process(3)
+        self.assertEqual(result.status, "SUPPORTED")
+        self.assertEqual(result.observations_in_revision, 3)
+
+    def test_duplicate_revision_does_not_count(self):
+        self.process(1)
+        result = self.process(1)
+        self.assertEqual(result.status, "CANDIDATE")
+        self.assertEqual(result.observations_in_revision, 1)
+
+    def test_ambiguous_segments_are_unavailable(self):
+        result = self.process(1, (7, 8))
+        self.assertEqual(result.status, "UNAVAILABLE")
+        self.assertEqual(result.consecutive_supported, 0)
+
+    def test_empty_lane_map_cancels_support(self):
+        for revision in (1, 2, 3):
+            self.process(revision)
+
+        result = self.process(4, ())
+        self.assertEqual(result.status, "UNAVAILABLE")
+        self.assertEqual(result.consecutive_supported, 0)
+
+    def test_stale_lane_map_not_reprocessed(self):
+        self.process(1)
+        self.node._lane_map_callback(self.lane_map(2))
+        self.node._latest_lane_map_time -= (
+            self.node._max_lane_map_age_s + 1.0
+        )
+        self.node._report_projection()
+
+        tracker = self.node._temporal_support
+        self.assertEqual(
+            tracker.snapshot(time.monotonic()).observations_in_revision,
+            1,
+        )
+        self.assertEqual(
+            tracker.snapshot(time.monotonic() + 3.0).status,
+            "STALE",
+        )
+
+    def test_new_route_revision_resets_history(self):
+        self.process(1)
+        self.process(2)
+        self.node._route_callback(self.route(2, start=10.0))
+
+        result = self.node._temporal_support.snapshot(
+            time.monotonic()
+        )
+        self.assertEqual(result.status, "WAITING")
+        self.assertEqual(result.route_identity.route_id, 2)
+
+    def test_older_valid_route_is_ignored(self):
+        self.node._route_callback(self.route(2, start=10.0))
+        self.node._route_callback(self.route(1))
+
+        self.assertEqual(self.node._active_route.route_id, 2)
+        self.assertEqual(
+            self.node._temporal_support.route_identity.route_id,
+            2,
+        )
+
+    def test_invalid_route_resets_active_geometry(self):
+        self.node._route_callback(self.route(2, valid=False))
+
+        self.assertIsNone(self.node._active_route)
+        self.assertIsNone(self.node._route_points)
+        self.assertIsNone(
+            self.node._temporal_support.route_identity
+        )
+
+    def test_old_valid_route_not_replayed_after_invalid(self):
+        self.node._route_callback(self.route(2, valid=False))
+        self.node._route_callback(self.route(1))
+
+        self.assertIsNone(self.node._active_route)
+        self.assertEqual(
+            self.node._last_route_identity.route_id,
+            2,
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

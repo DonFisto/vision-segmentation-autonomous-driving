@@ -32,6 +32,15 @@ from global_route_planner.route_support_policy import (
     evaluate_route_support,
 )
 
+from global_route_planner.lane_map_support_selection import (
+    SegmentSupportCandidate,
+    select_lane_map_support,
+)
+from global_route_planner.route_identity import RouteIdentity
+from global_route_planner.route_support_temporal import (
+    TemporalRouteSupportTracker,
+)
+
 from global_route_planner.lane_route_geometry import (
     LanePoint,
     compare_lane_to_route,
@@ -166,6 +175,9 @@ class RouteEgoDiagnosticNode(Node):
         self._latest_lane_map = None
         self._latest_lane_map_time = None
 
+        self._temporal_support = TemporalRouteSupportTracker()
+        self._last_route_identity = None
+
         route_qos = QoSProfile(
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=1,
@@ -206,6 +218,11 @@ class RouteEgoDiagnosticNode(Node):
             self._report_projection,
         )
 
+        self._temporal_timer = self.create_timer(
+            self._report_period_s,
+            self._report_temporal_snapshot,
+        )
+
         self.get_logger().info(
             "Route ego diagnostic initialized. "
             "Waiting for RoutePlan and odometry."
@@ -213,9 +230,6 @@ class RouteEgoDiagnosticNode(Node):
 
     def _route_callback(self, message: RoutePlan):
         """Validate and cache the active route geometry."""
-
-        self._active_route = None
-        self._route_points = None
 
         if message.header.frame_id != self._frame_id:
             self.get_logger().error(
@@ -235,12 +249,77 @@ class RouteEgoDiagnosticNode(Node):
             )
             return
 
+        try:
+            incoming = RouteIdentity(
+                mission_id=int(message.mission_id),
+                route_id=int(message.route_id),
+                map_revision=int(message.map_revision),
+            )
+        except (ValueError, TypeError, OverflowError) as exc:
+            self.get_logger().warn(
+                f"route_revision_consistency status=INVALID reason={exc}"
+            )
+            return
+
+        previous = self._last_route_identity
+
+        if (
+            previous is not None
+            and incoming.mission_id == previous.mission_id
+            and incoming.map_revision == previous.map_revision
+        ):
+            if incoming.route_id < previous.route_id:
+                self.get_logger().warn(
+                    "route_revision_consistency "
+                    "status=OUT_OF_ORDER_REVISION "
+                    f"route_id={incoming.route_id} "
+                    "action=IGNORE"
+                )
+                return
+
+            if (
+                incoming.route_id == previous.route_id
+                and (
+                    message.status != RoutePlan.STATUS_VALID
+                    or self._active_route is None
+                )
+            ):
+                self.get_logger().warn(
+                    "route_revision_consistency "
+                    "status=ROUTE_ID_STATUS_CONFLICT "
+                    f"route_id={incoming.route_id} "
+                    "action=IGNORE"
+                )
+                return
+
         if message.status != RoutePlan.STATUS_VALID:
+            self._last_route_identity = incoming
+            current = self._temporal_support.route_identity
+
+            if (
+                current is not None
+                and int(message.mission_id) == current.mission_id
+                and int(message.map_revision) == current.map_revision
+                and int(message.route_id) < current.route_id
+            ):
+                self.get_logger().warn(
+                    "route_revision_consistency "
+                    "status=OUT_OF_ORDER_REVISION "
+                    f"route_id={message.route_id} "
+                    "action=IGNORE"
+                )
+                return
+
+            self._active_route = None
+            self._route_points = None
+            self._temporal_support = TemporalRouteSupportTracker()
+
             self.get_logger().warn(
                 "RoutePlan not valid: "
                 f"mission_id={message.mission_id}, "
                 f"route_id={message.route_id}, "
-                f"status={message.status}"
+                f"status={message.status} "
+                "temporal_history=RESET"
             )
             return
 
@@ -295,8 +374,45 @@ class RouteEgoDiagnosticNode(Node):
             )
             return
 
+        try:
+            identity = RouteIdentity(
+                mission_id=int(message.mission_id),
+                route_id=int(message.route_id),
+                map_revision=int(message.map_revision),
+            )
+
+            consistency = self._temporal_support.register_route(
+                identity,
+                points,
+            )
+        except (ValueError, TypeError, OverflowError) as exc:
+            self.get_logger().warn(
+                f"route_revision_consistency status=INVALID reason={exc}"
+            )
+            return
+
+        if not consistency.accept_current_route:
+            self.get_logger().warn(
+                "route_revision_consistency "
+                f"status={consistency.status} "
+                f"route_id={identity.route_id} "
+                "action=IGNORE"
+            )
+            return
+
         self._route_points = points
         self._active_route = message
+        self._last_route_identity = identity
+
+        self.get_logger().info(
+            "route_revision_consistency "
+            f"mission_id={identity.mission_id} "
+            f"route_id={identity.route_id} "
+            f"status={consistency.status} "
+            f"history_action={consistency.history_action} "
+            f"geometry_candidate="
+            f"{str(consistency.geometry_correspondence_candidate).lower()}"
+        )
 
         self.get_logger().info(
             "Accepted RoutePlan: "
@@ -384,7 +500,7 @@ class RouteEgoDiagnosticNode(Node):
                 f"segment_id={segment_id} "
                 f"reason={exc}"
             )
-            return
+            return None
 
         self.get_logger().info(
             "route_support_decision "
@@ -397,6 +513,98 @@ class RouteEgoDiagnosticNode(Node):
             f"{result.near_ego_interval_m:.3f} "
             f"initial_gap_tolerated="
             f"{str(result.initial_gap_tolerated).lower()}"
+        )
+        return result
+
+    def _record_selected_support(self, lane_map_revision, candidates):
+        identity = self._temporal_support.route_identity
+
+        if identity is None:
+            return
+
+        now = time.monotonic()
+        previous = self._temporal_support.snapshot(now)
+        revision = int(lane_map_revision)
+        last = previous.last_lane_map_revision
+
+        if last is not None and revision <= last:
+            if revision < last:
+                self.get_logger().warn(
+                    "route_support_observation "
+                    "status=SKIPPED "
+                    "reason=LANE_MAP_REVISION_REGRESSED "
+                    f"previous_revision={last} "
+                    f"received_revision={revision}"
+                )
+            return
+
+        try:
+            selection = select_lane_map_support(candidates)
+
+            snapshot = self._temporal_support.observe(
+                identity,
+                selection.decision,
+                observed_at_s=now,
+                lane_map_revision=revision,
+            )
+        except (ValueError, TypeError, OverflowError) as exc:
+            self.get_logger().warn(
+                "route_support_observation "
+                f"status=INVALID reason={exc}"
+            )
+            return
+
+        selected_id = (
+            "none"
+            if selection.selected_segment_id is None
+            else str(selection.selected_segment_id)
+        )
+
+        self.get_logger().info(
+            "lane_map_route_support "
+            f"mission_id={identity.mission_id} "
+            f"route_id={identity.route_id} "
+            f"lane_map_revision={revision} "
+            f"selected_segment_id={selected_id} "
+            f"candidate_count={selection.candidate_count} "
+            f"supported_candidates={selection.supported_candidate_count} "
+            f"selection_reason={selection.selection_reason} "
+            f"decision_status={selection.decision.status} "
+            f"temporal_status={snapshot.status} "
+            f"consecutive_supported={snapshot.consecutive_supported}"
+        )
+
+    def _report_temporal_snapshot(self):
+        now = time.monotonic()
+        snapshot = self._temporal_support.snapshot(now)
+        identity = snapshot.route_identity
+
+        if identity is None:
+            return
+
+        age = (
+            "none"
+            if snapshot.latest_observation_age_s is None
+            else f"{snapshot.latest_observation_age_s:.3f}"
+        )
+
+        lane_revision = (
+            "none"
+            if snapshot.last_lane_map_revision is None
+            else str(snapshot.last_lane_map_revision)
+        )
+
+        self.get_logger().info(
+            "route_support_temporal "
+            f"mission_id={identity.mission_id} "
+            f"route_id={identity.route_id} "
+            f"status={snapshot.status} "
+            f"reason={snapshot.reason} "
+            f"consecutive_supported={snapshot.consecutive_supported} "
+            f"observations={snapshot.observations_in_revision} "
+            f"lane_map_revision={lane_revision} "
+            f"observation_age_s={age} "
+            f"freshness_weight={snapshot.freshness_weight:.3f}"
         )
 
     def _report_lane_comparison(
@@ -498,9 +706,11 @@ class RouteEgoDiagnosticNode(Node):
                 lane_map.map_revision,
                 "none",
             )
+            self._record_selected_support(lane_map.map_revision, [])
             return
 
         compared_segments = 0
+        support_candidates = []
 
         for segment in lane_map.segments:
             if not segment.drivable or len(segment.centerline) < 2:
@@ -643,12 +853,25 @@ class RouteEgoDiagnosticNode(Node):
                 f"{len(forward_coverage.supported_intervals_ahead)}"
             )
 
-            self._log_route_support(
+            support_decision = self._log_route_support(
                 decision,
                 forward_coverage,
                 lane_map.map_revision,
                 segment.id,
             )
+
+            if support_decision is not None:
+                support_candidates.append(
+                    SegmentSupportCandidate(
+                        segment_id=int(segment.id),
+                        decision=support_decision,
+                    )
+                )
+
+        self._record_selected_support(
+            lane_map.map_revision,
+            support_candidates,
+        )
 
         if compared_segments == 0:
             self.get_logger().warn(
