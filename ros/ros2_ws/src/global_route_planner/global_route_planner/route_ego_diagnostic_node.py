@@ -28,6 +28,10 @@ from global_route_planner.lane_route_decision import (
     evaluate_lane_route_association,
 )
 
+from global_route_planner.route_support_policy import (
+    evaluate_route_support,
+)
+
 from global_route_planner.lane_route_geometry import (
     LanePoint,
     compare_lane_to_route,
@@ -358,6 +362,41 @@ class RouteEgoDiagnosticNode(Node):
         self._latest_lane_map = message
         self._latest_lane_map_time = time.monotonic()
 
+    def _log_route_support(
+        self,
+        association,
+        coverage,
+        lane_map_revision,
+        segment_id,
+    ):
+        try:
+            result = evaluate_route_support(
+                association,
+                coverage,
+            )
+        except (ValueError, OverflowError) as exc:
+            self.get_logger().warn(
+                "route_support_decision "
+                "status=INVALID "
+                f"route_id={self._active_route.route_id} "
+                f"segment_id={segment_id} "
+                f"reason={exc}"
+            )
+            return
+
+        self.get_logger().info(
+            "route_support_decision "
+            f"route_id={self._active_route.route_id} "
+            f"lane_map_revision={lane_map_revision} "
+            f"segment_id={segment_id} "
+            f"status={result.status} "
+            f"reason={result.reason} "
+            f"near_ego_interval_m="
+            f"{result.near_ego_interval_m:.3f} "
+            f"initial_gap_tolerated="
+            f"{str(result.initial_gap_tolerated).lower()}"
+        )
+
     def _report_lane_comparison(
         self,
         window,
@@ -449,6 +488,13 @@ class RouteEgoDiagnosticNode(Node):
                 f"status={decision.status} "
                 f"reason={decision.reason} "
                 "source=EMPTY_LANE_MAP"
+            )
+
+            self._log_route_support(
+                decision,
+                None,
+                lane_map.map_revision,
+                "none",
             )
             return
 
@@ -593,6 +639,13 @@ class RouteEgoDiagnosticNode(Node):
                 f"first_support_gap_m={first_gap} "
                 f"interval_count_ahead="
                 f"{len(forward_coverage.supported_intervals_ahead)}"
+            )
+
+            self._log_route_support(
+                decision,
+                forward_coverage,
+                lane_map.map_revision,
+                segment.id,
             )
 
         if compared_segments == 0:
