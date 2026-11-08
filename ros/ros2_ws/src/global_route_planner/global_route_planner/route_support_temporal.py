@@ -83,6 +83,10 @@ class TemporalRouteSupportTracker:
         self._observations_in_revision = 0
         self._last_lane_map_revision = None
 
+    def reset_evidence_history(self) -> None:
+        """Clear temporal evidence without replacing the active route."""
+        self._clear_history()
+
     @property
     def route_identity(self) -> RouteIdentity | None:
         return self._identity

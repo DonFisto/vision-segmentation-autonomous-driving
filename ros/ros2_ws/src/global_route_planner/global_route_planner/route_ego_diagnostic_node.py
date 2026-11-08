@@ -29,7 +29,15 @@ from global_route_planner.lane_route_decision import (
 )
 
 from global_route_planner.route_support_policy import (
+    RouteSupportDecision,
     evaluate_route_support,
+)
+from global_route_planner.lane_map_provenance_gate import (
+    LaneMapProvenance,
+    classify_lane_map_provenance,
+)
+from global_route_planner.lane_map_evidence_time import (
+    classify_evidence_time,
 )
 
 from global_route_planner.lane_map_support_selection import (
@@ -177,6 +185,8 @@ class RouteEgoDiagnosticNode(Node):
 
         self._temporal_support = TemporalRouteSupportTracker()
         self._last_route_identity = None
+        self._last_accepted_provenance = None
+        self._last_reference_stamp_ns = None
 
         route_qos = QoSProfile(
             history=QoSHistoryPolicy.KEEP_LAST,
@@ -516,37 +526,121 @@ class RouteEgoDiagnosticNode(Node):
         )
         return result
 
-    def _record_selected_support(self, lane_map_revision, candidates):
+    def _record_selected_support(self, lane_map, candidates):
+        """Admit one map update using evidence and clock provenance."""
+
         identity = self._temporal_support.route_identity
 
-        if identity is None:
+        if identity is None or self._latest_odom is None:
             return
 
-        now = time.monotonic()
-        previous = self._temporal_support.snapshot(now)
-        revision = int(lane_map_revision)
-        last = previous.last_lane_map_revision
-
-        if last is not None and revision <= last:
-            if revision < last:
-                self.get_logger().warn(
-                    "route_support_observation "
-                    "status=SKIPPED "
-                    "reason=LANE_MAP_REVISION_REGRESSED "
-                    f"previous_revision={last} "
-                    f"received_revision={revision}"
-                )
+        if int(lane_map.schema_version) != 3:
+            self.get_logger().warn(
+                "route_support_observation "
+                "status=SKIPPED reason=UNSUPPORTED_LANE_MAP_SCHEMA"
+            )
             return
+
+        def stamp_ns(stamp):
+            return (
+                int(stamp.sec) * 1_000_000_000
+                + int(stamp.nanosec)
+            )
 
         try:
+            provenance = LaneMapProvenance(
+                session_id=int(lane_map.map_session_id),
+                map_revision=int(lane_map.map_revision),
+                evidence_revision=int(lane_map.evidence_revision),
+                latest_evidence_stamp_ns=stamp_ns(
+                    lane_map.latest_evidence_stamp
+                ),
+            )
+
+            reference_ns = stamp_ns(
+                self._latest_odom.header.stamp
+            )
+
+            clock = classify_evidence_time(
+                evidence_stamp_ns=provenance.latest_evidence_stamp_ns,
+                reference_stamp_ns=reference_ns,
+                previous_reference_stamp_ns=(
+                    self._last_reference_stamp_ns
+                ),
+            )
+
+            if clock.reset_temporal_history:
+                self._temporal_support.reset_evidence_history()
+                self._last_reference_stamp_ns = reference_ns
+
+                self.get_logger().warn(
+                    "route_support_observation "
+                    "status=RESET "
+                    f"reason={clock.status}"
+                )
+                return
+
+            self._last_reference_stamp_ns = reference_ns
+
+            admission = classify_lane_map_provenance(
+                self._last_accepted_provenance,
+                provenance,
+            )
+
+            if not admission.accept_map:
+                if admission.status != "DUPLICATE":
+                    self.get_logger().warn(
+                        "route_support_observation "
+                        "status=SKIPPED "
+                        f"reason={admission.status}"
+                    )
+                return
+
+            if admission.reset_history:
+                self._temporal_support.reset_evidence_history()
+
+            self._last_accepted_provenance = provenance
+
             selection = select_lane_map_support(candidates)
+            decision = selection.decision
+
+            if decision.status == "SUPPORTED":
+                if (
+                    admission.may_confirm_positive
+                    and clock.may_confirm_positive
+                ):
+                    pass
+                elif not clock.may_confirm_positive:
+                    # Do not preserve positive confirmation when
+                    # incoming evidence fails the sensor-clock gate.
+                    decision = RouteSupportDecision(
+                        status="UNAVAILABLE",
+                        reason=clock.status,
+                        near_ego_interval_m=0.0,
+                        initial_gap_tolerated=False,
+                    )
+                else:
+                    # Pruning-only or other map-only changes must
+                    # not increase or refresh positive confirmation.
+                    self.get_logger().info(
+                        "route_support_observation "
+                        "status=SKIPPED "
+                        "reason=NO_NEW_POSITIVE_EVIDENCE "
+                        f"map_revision={provenance.map_revision} "
+                        f"evidence_revision={provenance.evidence_revision}"
+                    )
+                    return
+
+            elif not admission.may_apply_negative:
+                return
 
             snapshot = self._temporal_support.observe(
                 identity,
-                selection.decision,
-                observed_at_s=now,
-                lane_map_revision=revision,
+                decision,
+                observed_at_s=time.monotonic(),
+                lane_map_revision=provenance.map_revision,
             )
+
         except (ValueError, TypeError, OverflowError) as exc:
             self.get_logger().warn(
                 "route_support_observation "
@@ -564,12 +658,13 @@ class RouteEgoDiagnosticNode(Node):
             "lane_map_route_support "
             f"mission_id={identity.mission_id} "
             f"route_id={identity.route_id} "
-            f"lane_map_revision={revision} "
+            f"map_session_id={provenance.session_id} "
+            f"lane_map_revision={provenance.map_revision} "
+            f"evidence_revision={provenance.evidence_revision} "
+            f"provenance_status={admission.status} "
+            f"evidence_time_status={clock.status} "
             f"selected_segment_id={selected_id} "
-            f"candidate_count={selection.candidate_count} "
-            f"supported_candidates={selection.supported_candidate_count} "
-            f"selection_reason={selection.selection_reason} "
-            f"decision_status={selection.decision.status} "
+            f"decision_status={decision.status} "
             f"temporal_status={snapshot.status} "
             f"consecutive_supported={snapshot.consecutive_supported}"
         )
@@ -706,7 +801,7 @@ class RouteEgoDiagnosticNode(Node):
                 lane_map.map_revision,
                 "none",
             )
-            self._record_selected_support(lane_map.map_revision, [])
+            self._record_selected_support(lane_map, [])
             return
 
         compared_segments = 0
@@ -869,7 +964,7 @@ class RouteEgoDiagnosticNode(Node):
                 )
 
         self._record_selected_support(
-            lane_map.map_revision,
+            lane_map,
             support_candidates,
         )
 

@@ -69,12 +69,26 @@ class TestRouteEgoTemporalIntegration(unittest.TestCase):
         msg.pose.pose.orientation.w = 1.0
         return msg
 
-    def lane_map(self, revision, segment_ids=(7,)):
+    def lane_map(
+        self, revision, segment_ids=(7,),
+        session=42, evidence=None,
+    ):
+        if evidence is None:
+            evidence = revision
+
         msg = LaneMap()
         msg.header.frame_id = "carla_world"
         msg.header.stamp.sec = 1000
-        msg.schema_version = 2
+        msg.schema_version = 3
         msg.map_revision = revision
+        msg.map_session_id = session
+        msg.evidence_revision = evidence
+
+        if evidence > 0:
+            msg.latest_evidence_stamp.sec = 999
+            msg.latest_evidence_stamp.nanosec = (
+                evidence * 1_000_000
+            )
 
         for segment_id in segment_ids:
             segment = LaneSegment()
@@ -94,9 +108,9 @@ class TestRouteEgoTemporalIntegration(unittest.TestCase):
 
         return msg
 
-    def process(self, revision, segment_ids=(7,)):
+    def process(self, revision, segment_ids=(7,), **kwargs):
         self.node._lane_map_callback(
-            self.lane_map(revision, segment_ids)
+            self.lane_map(revision, segment_ids, **kwargs)
         )
         self.node._report_projection()
         return self.node._temporal_support.snapshot(
@@ -195,6 +209,115 @@ class TestRouteEgoTemporalIntegration(unittest.TestCase):
             self.node._last_route_identity.route_id,
             2,
         )
+
+
+    def test_map_only_positive_does_not_increment(self):
+        self.process(1)
+        snap = self.process(2, evidence=1)
+
+        self.assertEqual(snap.status, "CANDIDATE")
+        self.assertEqual(snap.consecutive_supported, 1)
+        self.assertEqual(snap.observations_in_revision, 1)
+
+        snap = self.process(3, evidence=2)
+        self.assertEqual(snap.consecutive_supported, 2)
+
+    def test_pruning_only_negative_cancels_support(self):
+        for revision in (1, 2, 3):
+            self.process(revision)
+
+        snap = self.process(4, (), evidence=3)
+
+        self.assertEqual(snap.status, "UNAVAILABLE")
+        self.assertEqual(snap.consecutive_supported, 0)
+
+    def test_mapper_session_restart_resets(self):
+        for revision in (10, 11, 12):
+            self.process(revision)
+
+        self.assertEqual(
+            self.node._temporal_support.snapshot(
+                time.monotonic()
+            ).status,
+            "SUPPORTED",
+        )
+
+        snap = self.process(1, session=43)
+
+        self.assertEqual(snap.status, "CANDIDATE")
+        self.assertEqual(snap.consecutive_supported, 1)
+        self.assertEqual(snap.observations_in_revision, 1)
+
+    def test_stale_evidence_is_not_positive(self):
+        msg = self.lane_map(1)
+        msg.latest_evidence_stamp.sec = 995
+
+        self.node._lane_map_callback(msg)
+        self.node._report_projection()
+
+        snap = self.node._temporal_support.snapshot(
+            time.monotonic()
+        )
+        self.assertEqual(snap.status, "UNAVAILABLE")
+        self.assertEqual(snap.consecutive_supported, 0)
+
+    def test_stale_new_evidence_cancels_existing_support(self):
+        for revision in (1, 2, 3):
+            self.process(revision)
+
+        odom = self.odometry()
+        odom.header.stamp.sec = 1005
+        self.node._odom_callback(odom)
+
+        msg = self.lane_map(4)
+        msg.header.stamp.sec = 1005
+
+        self.node._lane_map_callback(msg)
+        self.node._report_projection()
+
+        snap = self.node._temporal_support.snapshot(
+            time.monotonic()
+        )
+        self.assertEqual(snap.status, "UNAVAILABLE")
+
+    def test_legacy_schema_cannot_confirm(self):
+        msg = self.lane_map(1)
+        msg.schema_version = 2
+
+        self.node._lane_map_callback(msg)
+        self.node._report_projection()
+
+        snap = self.node._temporal_support.snapshot(
+            time.monotonic()
+        )
+        self.assertEqual(snap.status, "WAITING")
+
+    def test_clock_regression_resets_evidence(self):
+        self.process(1)
+
+        odom = self.odometry()
+        odom.header.stamp.sec = 900
+        self.node._odom_callback(odom)
+
+        msg = self.lane_map(2)
+        msg.header.stamp.sec = 900
+
+        self.node._lane_map_callback(msg)
+        self.node._report_projection()
+
+        snap = self.node._temporal_support.snapshot(
+            time.monotonic()
+        )
+        self.assertEqual(snap.status, "WAITING")
+        self.assertEqual(snap.observations_in_revision, 0)
+
+    def test_old_evidence_revision_does_not_count(self):
+        self.process(1)
+        snap = self.process(2, evidence=0)
+
+        self.assertEqual(snap.status, "CANDIDATE")
+        self.assertEqual(snap.consecutive_supported, 1)
+        self.assertEqual(snap.observations_in_revision, 1)
 
 
 if __name__ == "__main__":
