@@ -238,6 +238,7 @@ class RouteEgoDiagnosticNode(Node):
         if message.status != RoutePlan.STATUS_VALID:
             self.get_logger().warn(
                 "RoutePlan not valid: "
+                f"mission_id={message.mission_id}, "
                 f"route_id={message.route_id}, "
                 f"status={message.status}"
             )
@@ -299,6 +300,7 @@ class RouteEgoDiagnosticNode(Node):
 
         self.get_logger().info(
             "Accepted RoutePlan: "
+            f"mission_id={message.mission_id}, "
             f"route_id={message.route_id}, "
             f"map_revision={message.map_revision}, "
             f"poses={pose_count}"

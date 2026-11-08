@@ -183,6 +183,7 @@ def build_route_plan_message(
     route,
     start_association,
     goal_association,
+    mission_id: int,
     route_id: int,
     map_revision: int,
     stamp,
@@ -197,6 +198,10 @@ def build_route_plan_message(
     message.header.stamp = stamp
     message.header.frame_id = (
         frame_id
+    )
+
+    message.mission_id = int(
+        mission_id
     )
 
     message.route_id = int(
@@ -282,6 +287,7 @@ def build_route_plan_message(
 def build_invalid_route_plan_message(
     start_association,
     goal_association,
+    mission_id: int,
     route_id: int,
     map_revision: int,
     stamp,
@@ -300,6 +306,10 @@ def build_invalid_route_plan_message(
     message.header.stamp = stamp
     message.header.frame_id = (
         frame_id
+    )
+
+    message.mission_id = int(
+        mission_id
     )
 
     message.route_id = int(

@@ -5,6 +5,7 @@ uint8 STATUS_BLOCKED=3
 
 std_msgs/Header header
 
+uint64 mission_id
 uint64 route_id
 uint64 map_revision
 

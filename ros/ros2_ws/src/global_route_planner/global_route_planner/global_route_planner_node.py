@@ -32,6 +32,9 @@ from global_route_planner.carla_topology_adapter import (
 from global_route_planner.global_segment_ids import (
     topology_segment_id_map,
 )
+from global_route_planner.route_identity import (
+    RouteIdentitySequence,
+)
 from global_route_planner.route_plan_builder import (
     build_invalid_route_plan_message,
     build_route_plan_message,
@@ -189,8 +192,6 @@ class GlobalRoutePlannerNode(Node):
             ).value
         )
 
-        self._route_id = 0
-
         self._latest_start_association = None
         self._last_planned_start_node = None
         self._goal_association = None
@@ -258,6 +259,10 @@ class GlobalRoutePlannerNode(Node):
                     self._carla_map.to_opendrive()
                 ),
             )
+        )
+
+        self._identity_sequence = RouteIdentitySequence(
+            map_revision=self._map_revision,
         )
 
         topology_segment_ids = (
@@ -336,18 +341,6 @@ class GlobalRoutePlannerNode(Node):
             f"{route_plan_topic}"
         )
 
-    def _next_route_id(
-        self,
-    ) -> int:
-        self._route_id = (
-            self._route_id + 1
-        ) & ((1 << 64) - 1)
-
-        if self._route_id == 0:
-            self._route_id = 1
-
-        return self._route_id
-
     def _associate_position(
         self,
         position,
@@ -399,12 +392,15 @@ class GlobalRoutePlannerNode(Node):
             )
             return
 
+        mission_id = self._identity_sequence.accept_goal()
+
         self._goal_association = goal
 
         self._waiting_for_goal_logged = False
 
         self.get_logger().info(
             "accepted_goal "
+            f"mission_id={mission_id} "
             f"requested_x="
             f"{message.pose.position.x:.3f} "
             f"requested_y="
@@ -492,9 +488,7 @@ class GlobalRoutePlannerNode(Node):
                 )
             )
         except NoPathError as exc:
-            route_id = (
-                self._next_route_id()
-            )
+            identity = self._identity_sequence.issue_route()
 
             stamp = (
                 self.get_clock()
@@ -506,7 +500,8 @@ class GlobalRoutePlannerNode(Node):
                 build_invalid_route_plan_message(
                     start_association=start,
                     goal_association=goal,
-                    route_id=route_id,
+                    mission_id=identity.mission_id,
+                    route_id=identity.route_id,
                     map_revision=(
                         self._map_revision
                     ),
@@ -530,7 +525,8 @@ class GlobalRoutePlannerNode(Node):
                 "published_route_plan "
                 "search=a_star "
                 f"reason={reason} "
-                f"route_id={route_id} "
+                f"mission_id={identity.mission_id} "
+                f"route_id={identity.route_id} "
                 f"start={start.node_key} "
                 f"goal={goal.node_key} "
                 "no_path=true "
@@ -543,9 +539,7 @@ class GlobalRoutePlannerNode(Node):
 
             return
 
-        route_id = (
-            self._next_route_id()
-        )
+        identity = self._identity_sequence.issue_route()
 
         stamp = (
             self.get_clock()
@@ -559,7 +553,8 @@ class GlobalRoutePlannerNode(Node):
                 route=route,
                 start_association=start,
                 goal_association=goal,
-                route_id=route_id,
+                mission_id=identity.mission_id,
+                route_id=identity.route_id,
                 map_revision=(
                     self._map_revision
                 ),
@@ -596,7 +591,8 @@ class GlobalRoutePlannerNode(Node):
             "published_route_plan "
             "search=a_star "
             f"reason={reason} "
-            f"route_id={route_id} "
+            f"mission_id={identity.mission_id} "
+            f"route_id={identity.route_id} "
             f"start={start.node_key} "
             f"goal={goal.node_key} "
             f"cost_m={route.total_cost_m:.3f} "
